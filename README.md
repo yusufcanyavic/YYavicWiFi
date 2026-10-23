@@ -28,7 +28,7 @@ macOS Wi-Fi layer were developed in YYavicWiFi by Yusufcan Yaviç.
 
 ## Measured result
 
-- **Machine:** Tongfang-chassis R9T Slayer laptop, AMD Ryzen 9 8940HX,
+- **Machine:** Tongfang-chassis R9T Slayer laptop, AMD Ryzen 9 8945HX,
   SMBIOS MacBookPro16,2, macOS **15.8.1 (24H32)**, OpenCore.
 - **Access point:** Wi-Fi 6 router, 5 GHz channel 56, 160 MHz, WPA2-PSK.
 - **Internet:** an ISP line of **1 Gbit/s download / 50 Mbit/s upload**. All

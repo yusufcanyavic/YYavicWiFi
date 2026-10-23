@@ -1,7 +1,7 @@
 # Changelog
 
 Speeds are Chrome speedtest results (download / upload, Mbit/s) on the test
-machine (Tongfang-chassis R9T Slayer laptop, AMD Ryzen 9 8940HX, macOS 15.8.1,
+machine (Tongfang-chassis R9T Slayer laptop, AMD Ryzen 9 8945HX, macOS 15.8.1,
 MT7922) with a Wi-Fi 6 router on 5 GHz channel 56, over an ISP line of
 1 Gbit/s download / 50 Mbit/s upload (uploads are capped by the line).
 "nQ" = macOS `networkQuality -I en3` download.
