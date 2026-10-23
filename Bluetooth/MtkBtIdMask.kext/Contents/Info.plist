@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.yyavic.MtkBtIdMask</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>MtkBtIdMask</string>
+	<key>CFBundlePackageType</key>
+	<string>KEXT</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1.0.0</string>
+	<key>IOKitPersonalities</key>
+	<dict>
+		<key>MT7922 AzureWave 13D3:3585 as Foxconn 0489:E0D8</key>
+		<dict>
+			<key>CFBundleIdentifier</key>
+			<string>com.apple.driver.AppleUSBHostMergeProperties</string>
+			<key>IOClass</key>
+			<string>AppleUSBHostMergeProperties</string>
+			<key>IOProviderClass</key>
+			<string>IOUSBHostDevice</string>
+			<key>IOProviderMergeProperties</key>
+			<dict>
+				<key>idProduct</key>
+				<integer>57560</integer>
+				<key>idVendor</key>
+				<integer>1161</integer>
+			</dict>
+			<key>idProduct</key>
+			<integer>13701</integer>
+			<key>idVendor</key>
+			<integer>5075</integer>
+		</dict>
+	</dict>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright (C) 2026 Yusufcan Yavic. GPL-3.0-or-later. Plist-only: makes bluetoothd treat an MT7922 Bluetooth (USB 13D3:3585) as 0489:E0D8.</string>
+	<key>OSBundleLibraries</key>
+	<dict>
+		<key>com.apple.driver.AppleUSBHostMergeProperties</key>
+		<string>1.0</string>
+		<key>com.apple.iokit.IOUSBHostFamily</key>
+		<string>1.0</string>
+	</dict>
+</dict>
+</plist>

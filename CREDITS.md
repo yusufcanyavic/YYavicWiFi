@@ -16,8 +16,9 @@ kept in the source files:
 - **Linux `mt76` / `mt7921`** (MediaTek, Felix Fietkau, Lorenzo Bianconi and
   contributors) — reference for Wi-Fi 6 capabilities, firmware command layouts,
   ring sizes and the 160 MHz channel context.
-- **acidanthera** — MacKernelSDK.
-- **MediaTek Inc.** — MT7922 firmware (`LICENCE.mediatek`).
+- **acidanthera** — MacKernelSDK; Lilu and BlueToolFixup (BrcmPatchRAM), used
+  for Bluetooth (not included, see README).
+- **MediaTek Inc.** — MT7922 Wi-Fi and Bluetooth firmware (`LICENCE.mediatek`).
 - **laobamac** — SimpleMtkWlan, the early MT7921/MT7922 macOS port of
   OpenBSD `mwx` the radio started from (firmware loading, scan,
   authentication).

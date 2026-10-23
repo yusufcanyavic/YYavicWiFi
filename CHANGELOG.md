@@ -21,6 +21,9 @@ Everything below, plus:
   notifications while connected (it panicked WCLNetManager).
 - Release build without build-machine paths (prefix maps, `strip -S`);
   portable build scripts (`DEVELOPER_DIR`, `MACKERNELSDK`).
+- Bluetooth: setup guide in the README plus `Bluetooth/MtkBtIdMask.kext`
+  (USB ID mask so macOS's own `bluetoothd` uses its MT7922 path) and the
+  MT7922 Bluetooth firmware for `/etc/bluetool`.
 
 ## 0.6.9 — 160 MHz on by default — **920 / 46**
 
