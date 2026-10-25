@@ -188,7 +188,8 @@ IOService *YYavicAirWiFiLayerPCI::probe(IOService *provider, SInt32 *score)
     IOPCIDevice *dev = OSDynamicCast(IOPCIDevice, provider);
     if (dev != nullptr &&
         (dev->configRead16(kIOPCIConfigVendorID) != 0x14c3 ||
-         dev->configRead16(kIOPCIConfigDeviceID) != 0x7922))
+         (dev->configRead16(kIOPCIConfigDeviceID) != 0x7922 &&
+          dev->configRead16(kIOPCIConfigDeviceID) != 0x0616)))
         return nullptr;
     fPci = dev;
     return this;
@@ -1547,14 +1548,9 @@ static uint16_t yy_chanspec(uint8_t ch, uint8_t band, uint8_t bw, uint8_t center
     return (uint16_t)(center | (sb << 8) | w[bw] | b);
 }
 
-/* Turkey (ETSI): 2.4 GHz 1-13, 5 GHz 36-64 and 100-140. The radio's table
- * also had 14 and 149-177. */
-static bool yy_chan_allowed(uint8_t ch, uint8_t band)
-{
-    if (band != YY_RADIO_BAND_5G)
-        return ch >= 1 && ch <= 13;
-    return (ch >= 36 && ch <= 64) || (ch >= 100 && ch <= 140);
-}
+/* 0.7.1: the radio's channel table is already the selected country's
+ * (yyavic-cc boot-arg, see mwx_reg_* in the radio); 0.7.0 and earlier
+ * filtered it here with a fixed Turkish list. */
 
 /* HT/VHT data rate in 100 kbit/s for MCS 0-9, 1 stream, 800 ns GI; HE
  * (modes 8-11) for HE-MCS 0-11, 1 stream, 0.8/1.6/3.2 us GI. */
@@ -1610,8 +1606,6 @@ IOReturn YYavicAirWiFiLayer::fillChannels(apple80211_sup_channel_data *d)
     d->version = APPLE80211_VERSION;
     d->num_channels = 0;
     for (uint32_t i = 0; i < n && d->num_channels < APPLE80211_MAX_CHANNELS; i++) {
-        if (!yy_chan_allowed(ch[i].channel, ch[i].band))
-            continue;
         uint32_t k = d->num_channels;
         d->supported_channels[k].version = APPLE80211_VERSION;
         d->supported_channels[k].channel = ch[i].channel;
@@ -1656,12 +1650,14 @@ IOReturn YYavicAirWiFiLayer::fillChannelsInfo(void *info)
     }
     uint8_t *b = (uint8_t *)info;
     bzero(b, YY_CHINFO_SIZE);
-    b[0x08] = 'T';
-    b[0x09] = 'R';
+    {
+        struct yy_radio_status st;
+        bool ok = radioStatus(&st) == kIOReturnSuccess && st.country[0] != 0;
+        b[0x08] = ok ? st.country[0] : '0';
+        b[0x09] = ok ? st.country[1] : '0';
+    }
     uint16_t cnt = 0;
     for (uint32_t i = 0; i < n && cnt < YY_CHINFO_MAX; i++) {
-        if (!yy_chan_allowed(ch[i].channel, ch[i].band))
-            continue;
         bool g5 = ch[i].band == YY_RADIO_BAND_5G;
         uint8_t c = ch[i].channel;
         bool dfs = g5 && c >= 52 && c <= 144;
@@ -2614,7 +2610,10 @@ static IOReturn yy_version(apple80211_version_data *d, const char *s)
 IOReturn YYavicAirWiFiLayer::getDRIVER_VERSION(IO80211SkywalkInterface *, apple80211_version_data *d)
 {
     yy_trace("CTRL: getDRIVER_VERSION\n");
-    return yy_version(d, "YYavicWiFi 0.7.0 (MT7922)");
+#ifndef YY_VERSION_STR
+#define YY_VERSION_STR "dev"
+#endif
+    return yy_version(d, "YYavicWiFi " YY_VERSION_STR " (MT7922)");   /* YY_VERSION from the build */
 }
 
 IOReturn YYavicAirWiFiLayer::getHARDWARE_VERSION(IO80211SkywalkInterface *, apple80211_version_data *d)
@@ -2719,8 +2718,10 @@ IOReturn YYavicAirWiFiLayer::getCOUNTRY_CODE(IO80211SkywalkInterface *, apple802
         return kIOReturnBadArgument;
     d->version = APPLE80211_VERSION;
     memset(d->cc, 0, sizeof(d->cc));
-    d->cc[0] = 'T';
-    d->cc[1] = 'R';
+    struct yy_radio_status st;
+    bool ok = radioStatus(&st) == kIOReturnSuccess && st.country[0] != 0;
+    d->cc[0] = ok ? st.country[0] : '0';        /* yyavic-cc, "00" = world */
+    d->cc[1] = ok ? st.country[1] : '0';
     return kIOReturnSuccess;
 }
 

@@ -3,7 +3,8 @@
 **Developer:** Yusufcan Yaviç (Yusufcan Yavic) — YYavic
 
 YYavicWiFi is a single macOS kernel extension that makes a **MediaTek MT7922**
-PCIe card (often sold as AMD RZ616) work as a **native macOS Wi-Fi card**: it
+PCIe card (AMD sells MT7922-based modules as **RZ616**) work as a **native
+macOS Wi-Fi card**: it
 shows up in System Settings and the menu bar like an Apple card, uses macOS's
 own Wi-Fi stack (IO80211 / Skywalk, airportd, Keychain, auto-join) and needs
 no extra app.
@@ -56,6 +57,30 @@ limited by the 50 Mbit/s ISP line: faster uploads have not been measured.
 - WPA2-Personal (CCMP, hardware encryption)
 - Bluetooth works natively through macOS itself with the files in `Bluetooth/` (see "Bluetooth" below)
 
+## Supported hardware
+
+| Card | PCI ID | Status |
+|---|---|---|
+| MediaTek MT7922 | `14c3:7922` | **Tested** — the developer's card (AzureWave, subsystem `1a3b:5911`) |
+| AMD RZ616 modules that report `14c3:0616` | `14c3:0616` | Matched since **0.7.1**, **untested** — Linux `mt7921` drives this ID as an MT7922 (MT7922 firmware); the kext does the same |
+| MediaTek MT7921 / MT7921K | `14c3:7961` / `14c3:0608` | Matched, **untested**; stays at 80 MHz like Linux |
+
+The test machine's IDs: Wi-Fi PCI **`14c3:7922`** (chip id register `0x7922`),
+Bluetooth USB **`13D3:3585`** (AzureWave). "RZ616" is a product name: the
+developer has not had a card with the ID `0616`. Reports from `0616` owners
+(working or not, with the `mtkscan status` output) are welcome in the issues.
+
+**Find your IDs:**
+
+```sh
+ioreg -l | grep -o 'pci14c3,[0-9a-f]*' | sort -u          # Wi-Fi: pci14c3,7922 or pci14c3,616
+ioreg -p IOUSB -l -w0 | grep -E '"(idVendor|idProduct|USB Product Name)"'   # Bluetooth (decimal)
+```
+
+or System Information → PCI / USB. The kext matches by PCI ID, then uses the
+chip id register (`0x7922` = MT7922, as Linux `is_mt7922()`), so no ID
+spoofing, boot-arg or plist edit is needed for the IDs above.
+
 ## Requirements
 
 - **macOS 15.8.1 (build 24H32) only.** The native layer is built against the
@@ -63,9 +88,8 @@ limited by the 50 Mbit/s ISP line: faster uploads have not been measured.
   macOS build the layer **disables itself** at boot (log: `YYavicWiFi: native
   Wi-Fi layer disabled, unsupported macOS`) instead of panicking; the boot-arg
   `-yyavicnoverify` skips this check (only for testers, a wrong layout panics).
-- A MediaTek **MT7922** card (PCI `14c3:7922`). The kext also matches MT7921
-  (`14c3:7961`) and MT7921K (`14c3:0608`) — **untested**; on those it stays at
-  80 MHz like Linux.
+- A card from "Supported hardware" above.
+- Your country set with the boot-arg `yyavic-cc=XX` (see "Country and channels").
 - OpenCore. Tested settings: `SecureBootModel = Disabled`, SIP partly disabled
   (`csr-active-config = 0x00000A43`). Other combinations are untested.
 - Remove/disable any other driver for this card (itlwm/AirportItlwm-style MTK
@@ -104,10 +128,38 @@ If a boot goes wrong while the native layer starts, the next boot skips it
 automatically (NVRAM guard `yyavic-arm-guard`). To force the radio-only mode,
 boot with `-yyavicoff`.
 
+## Country and channels
+
+Set your country with the boot-arg **`yyavic-cc=XX`** (ISO 3166 two-letter
+code, e.g. `yyavic-cc=DE`, `yyavic-cc=US`). The radio then uses that region's
+channels, and the code is passed to the firmware and to macOS. Without it the
+kext uses only the channels allowed in all of the regions below.
+
+| Region | Countries | 2.4 GHz | 5 GHz |
+|---|---|---|---|
+| ETSI | EU, `IS` `LI` `NO` `CH` `GB` `TR` | 1–13 | 36–64, 100–140 |
+| FCC | `US` `PR` | 1–11 | 36–64, 100–144, 149–165 |
+| Japan | `JP` | 1–13 | 36–64, 100–140 |
+| China | `CN` | 1–13 | 36–64, 149–165 |
+| Default (no or other country) | — | 1–11 | 36–64 |
+
+Channels 52–144 are DFS channels: macOS sees them as such, and the radio's scan is
+passive (it sends no probe requests). Other countries are not in the
+table yet and get the default set (the code still goes to the firmware).
+Pull requests that add countries are welcome, with a source (e.g. the Linux
+`wireless-regdb` entry). Using channels that are not allowed where you are is
+your responsibility.
+
+Versions up to 0.7.0 always used the Turkish channel list (the developer's
+country); 0.7.1 made it configurable. To keep that list, use `yyavic-cc=TR`.
+
+Check the active country: `./mtkscan dbg 37 0` (see Diagnostics).
+
 ## Boot arguments
 
 | Boot-arg | Effect |
 |---|---|
+| `yyavic-cc=XX` | Country / regulatory region (see above); default: common channels only |
 | `-yyavicoff` | Do not start the native layer (radio only, no macOS Wi-Fi) |
 | `-yyavicnohe` | Disable 802.11ax (connect as 802.11ac) |
 | `-yyavicnodrvavail` | Do not post the boot-time "driver available" event |
@@ -126,7 +178,8 @@ boot with `-yyavicoff`.
   when the link is 802.11ax / 160 MHz (cosmetic; the transmit rate, e.g. 2402,
   is correct). The cause is understood (macOS defers loading the card
   capabilities); the fix is not safe yet.
-- The channel list is fixed to 2.4 GHz 1–13 and 5 GHz 36–64, 100–140.
+- Built-in channel rules cover the regions in "Country and channels" only.
+- `14c3:0616` (RZ616), MT7921 and MT7921K are matched but untested.
 - No sleep/wake support, no 6 GHz, no AirDrop/AWDL, no Personal Hotspot (AP).
 
 ## Bluetooth
@@ -202,7 +255,7 @@ The MacKernelSDK (acidanthera) copy is included in `Source/YYavicMtkWlan/MacKern
 
 ```sh
 cd Source
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer YY_VERSION=0.7.0 ./build-yyavic.sh release
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer YY_VERSION=0.7.1 ./build-yyavic.sh release
 # result: Source/build-release/YYavicWiFi.kext
 ```
 
@@ -221,6 +274,7 @@ clang -I Source/YYavicMtkWlan/include -framework IOKit -framework CoreFoundation
 ./mtkscan dbg 33 0        # 802.11ax state and received HE rates
 ./mtkscan dbg 35 0        # AP channel width (VHT operation) and our 160 MHz state
 ./mtkscan dbg 34 0        # A-MSDU / TX kick counters
+./mtkscan dbg 37 0        # country, region and number of active channels
 ```
 
 When reporting a problem, include the macOS build, the `mtkscan status`

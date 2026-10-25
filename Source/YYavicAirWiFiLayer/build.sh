@@ -8,7 +8,7 @@ CXX=$(DEVELOPER_DIR=$XC xcrun -f clang++); CC=$(DEVELOPER_DIR=$XC xcrun -f clang
 KSDK=$(DEVELOPER_DIR=$XC xcrun --sdk macosx --show-sdk-path)
 OUT=$D/build; rm -rf $OUT; mkdir -p $OUT/obj $OUT/YYavicAirWiFiLayer.kext/Contents/MacOS
 FLAGS=(-target x86_64-apple-macos11.0 -mkernel -fapple-kext -nostdinc -fno-builtin -fno-common -O2 -g
-       -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DPRIVATE -D__PRIVATE_SPI__ -DAPPLE -DNeXT
+       -DYY_VERSION_STR='"'${YY_VERSION:-dev}'"' -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DPRIVATE -D__PRIVATE_SPI__ -DAPPLE -DNeXT
        -I$D/src -I$SDK/Headers -I$SDK/Headers/IOKit -isystem $KSDK/System/Library/Frameworks/Kernel.framework/Headers
        -fmacro-prefix-map=$D/../= -fdebug-prefix-map=$D/../=
        -Wno-everything -Werror=implicit-function-declaration)

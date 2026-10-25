@@ -1097,6 +1097,11 @@ static IOReturn yy_radio_gate(OSObject *owner, void *a0, void *, void *, void *)
             st->he_link = (ni->ni_flags & IEEE80211_NODE_HE) != 0;
         }
         st->he_enabled = (ic->ic_flags & IEEE80211_F_HEON) != 0;
+        {
+            const char *cc = that->fHalService->getDriverInfo()->getFirmwareCountryCode();
+            st->country[0] = cc != NULL && cc[0] ? cc[0] : '0';
+            st->country[1] = cc != NULL && cc[0] && cc[1] ? cc[1] : '0';
+        }
         return kIOReturnSuccess;
     }
     case YY_RF_LEAVE: {

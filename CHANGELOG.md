@@ -6,6 +6,26 @@ MT7922) with a Wi-Fi 6 router on 5 GHz channel 56, over an ISP line of
 1 Gbit/s download / 50 Mbit/s upload (uploads are capped by the line).
 "nQ" = macOS `networkQuality -I en3` download.
 
+## 0.7.1 — 2026-10-26 — RZ616 ID, country setting
+
+- **AMD RZ616 `14c3:0616`** is matched and run as an MT7922 (MT7922
+  firmware, 160 MHz), as in Linux `mt7921/pci.c`. The chip id register now
+  decides MT7922 vs. MT7921 (Linux `is_mt7922()`), the PCI ID only gives the
+  default. Untested on a real `0616` card.
+- **No more fixed Turkish channel list.** The country comes from the new
+  boot-arg `yyavic-cc=XX`; channel sets for ETSI (EU/EEA, CH, GB, TR), FCC
+  (US), Japan and China, otherwise the channels common to all of them
+  (2.4 GHz 1–11, 5 GHz 36–64). The rules now apply in the radio itself, so
+  the firmware channel domain, the scan and the list macOS gets are the same.
+  Before, only the macOS list was filtered, and the radio still scanned
+  channels 14 and 144–173. The country code goes to the firmware (channel domain, TX
+  power) and to macOS (country code, channel info) instead of a fixed `TR`.
+- `mtkscan dbg 37`: shows the country; `dbg 37 <hex>` changes it while Wi-Fi
+  is off (e.g. `5553` = `US`, `3030` = default), used from the next Wi-Fi on.
+- README: supported hardware with PCI / USB IDs, how to find yours.
+- System Information → Wi-Fi → Firmware Version shows the real driver
+  version (it was a fixed "0.7.0" string); it now comes from the build.
+
 ## 0.7.0 — 2026-10-23 — first public release — 913 / 47
 
 Everything below, plus:

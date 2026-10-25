@@ -108,7 +108,8 @@ struct yy_radio_status {
     /* ABI 6 */
     uint8_t  he_enabled;        /* radio advertises 802.11ax (no -yyavicnohe) */
     uint8_t  he_link;           /* the current association is HE */
-    uint8_t  reserved6[2];
+    char     country[2];        /* 0.7.1 (was reserved): the radio's country
+                                 * code (yyavic-cc), "00" = world */
 };
 
 #endif /* yy_radio_h */

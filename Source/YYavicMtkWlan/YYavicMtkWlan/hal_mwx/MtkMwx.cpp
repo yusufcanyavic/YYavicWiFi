@@ -1,7 +1,7 @@
 /*
  * Reworked by Yusufcan Yavic, 2026, for YYavicWiFi (native MT7922 Wi-Fi on macOS).
  * Starting point: the SimpleMtkWlan version of this file by laobamac.
- * Added and changed by Yusufcan Yavic: Wi-Fi 6 (HE) and 160 MHz firmware setup, RX A-MSDU reassembly, BlockAck 256, larger DMA rings and TXWI pool, BSS RLM fix, HE rate decoding, diagnostics, stability fixes.
+ * Added and changed by Yusufcan Yavic: Wi-Fi 6 (HE) and 160 MHz firmware setup, RX A-MSDU reassembly, BlockAck 256, larger DMA rings and TXWI pool, BSS RLM fix, HE rate decoding, AMD RZ616 (14c3:0616) support, per-country channel sets (yyavic-cc), diagnostics, stability fixes.
  * See CHANGELOG.md. The original notices below remain in force; these
  * modifications are distributed under the same license as this file.
  */
@@ -63,6 +63,8 @@ OSDefineMetaClassAndStructors(MtkMwx, MtkHalService)
 #define PCI_PRODUCT_MEDIATEK_MT7921    0x7961
 #define PCI_PRODUCT_MEDIATEK_MT7921K   0x0608
 #define PCI_PRODUCT_MEDIATEK_MT7922    0x7922
+/* AMD RZ616: an MT7922 (Linux mt7921/pci.c loads the MT7922 firmware for it) */
+#define PCI_PRODUCT_MEDIATEK_RZ616     0x0616
 
 #define MWX_LOG(x...) smtw_trace("YYavicMtkWlan-mwx: " x)
 #define MWX_DEV_LOG(sc, fmt, args...) \
@@ -307,6 +309,7 @@ static const struct pci_matchid mwx_devices[] = {
 	{ PCI_VENDOR_MEDIATEK, PCI_PRODUCT_MEDIATEK_MT7921 },
 	{ PCI_VENDOR_MEDIATEK, PCI_PRODUCT_MEDIATEK_MT7921K },
 	{ PCI_VENDOR_MEDIATEK, PCI_PRODUCT_MEDIATEK_MT7922 },
+	{ PCI_VENDOR_MEDIATEK, PCI_PRODUCT_MEDIATEK_RZ616 },
 };
 
 /* Keep the OpenBSD DPRINTF path available, but do not enable it by default.
@@ -524,6 +527,7 @@ struct mwx_softc {
 	struct mwx_hw_capa	sc_capa;
 	uint8_t			sc_lladdr[ETHER_ADDR_LEN];
 	char			sc_alpha2[4]; /* regulatory-domain */
+	int			sc_reg;	/* enum mwx_reg (0.7.1) */
 
 	int16_t			sc_coverage_class;
 	uint8_t			sc_slottime;
@@ -607,6 +611,130 @@ const struct mwx_rate {
 #define MWX_RATE_HT_SISO_MCS_INV_PLCP 0x20
 
 #define	DEVNAME(s)	((s)->sc_dev.dv_xname)
+
+/*
+ * Regulatory channel sets (Yusufcan Yavic, 0.7.1; 0.7.0 and earlier used the
+ * Turkish set in the native layer only, while the radio scanned all of its
+ * channels). The country is the boot-arg yyavic-cc=XX (ISO 3166 alpha-2).
+ * Without it, or for a country not listed below, only the channels allowed
+ * in all of these regions are used ("00"). The country code is also what the
+ * firmware gets in the channel domain and TX power commands, as Linux sends
+ * the regdomain's alpha2. 20 MHz channel numbers; the radio's scan is passive.
+ */
+enum mwx_reg { MWX_REG_WORLD, MWX_REG_ETSI, MWX_REG_FCC, MWX_REG_JP, MWX_REG_CN };
+static const char *const mwx_reg_names[] = { "world", "ETSI", "FCC", "JP", "CN" };
+/* EU, EEA, CH, GB, TR: 2.4 GHz 1-13, 5 GHz 36-64 and 100-140 */
+static const char mwx_reg_etsi[] =
+    "AT BE BG CH CY CZ DE DK EE ES FI FR GB GR HR HU IE IS IT LI LT LU LV MT "
+    "NL NO PL PT RO SE SI SK TR";
+
+static int
+mwx_reg_of(const char *cc)
+{
+	const char *p;
+
+	if (cc[0] == 'U' && cc[1] == 'S')
+		return MWX_REG_FCC;		/* 1-11, 36-64, 100-144, 149-165 */
+	if (cc[0] == 'P' && cc[1] == 'R')
+		return MWX_REG_FCC;
+	if (cc[0] == 'J' && cc[1] == 'P')
+		return MWX_REG_JP;		/* 1-13, 36-64, 100-140 */
+	if (cc[0] == 'C' && cc[1] == 'N')
+		return MWX_REG_CN;		/* 1-13, 36-64, 149-165 */
+	for (p = mwx_reg_etsi; p[0] != '\0' && p[1] != '\0'; p += 3) {
+		if (p[0] == cc[0] && p[1] == cc[1])
+			return MWX_REG_ETSI;
+		if (p[2] == '\0')
+			break;
+	}
+	return MWX_REG_WORLD;			/* 1-11, 36-64 */
+}
+
+static int
+mwx_reg_allowed(int reg, int is5, int ch)
+{
+	if (!is5)
+		return ch >= 1 && ch <= ((reg == MWX_REG_WORLD ||
+		    reg == MWX_REG_FCC) ? 11 : 13);
+	if (ch >= 36 && ch <= 64)
+		return 1;
+	switch (reg) {
+	case MWX_REG_ETSI:
+	case MWX_REG_JP:
+		return ch >= 100 && ch <= 140;
+	case MWX_REG_FCC:
+		return (ch >= 100 && ch <= 144) || (ch >= 149 && ch <= 165);
+	case MWX_REG_CN:
+		return ch >= 149 && ch <= 165;
+	default:
+		return 0;
+	}
+}
+
+/* Country code (two letters, upper case) or "00"; sets sc_alpha2 and sc_reg. */
+static void
+mwx_reg_set(struct mwx_softc *sc, const char *cc)
+{
+	char a = cc[0], b = a != '\0' ? cc[1] : '\0';
+
+	if (a >= 'a' && a <= 'z')
+		a -= 'a' - 'A';
+	if (b >= 'a' && b <= 'z')
+		b -= 'a' - 'A';
+	if (a < 'A' || a > 'Z' || b < 'A' || b > 'Z') {
+		a = '0';
+		b = '0';
+	}
+	sc->sc_alpha2[0] = a;
+	sc->sc_alpha2[1] = b;
+	sc->sc_alpha2[2] = '\0';
+	sc->sc_alpha2[3] = '\0';
+	sc->sc_reg = a == '0' ? MWX_REG_WORLD : mwx_reg_of(sc->sc_alpha2);
+}
+
+/* Fill ic_channels with the allowed channels (the others are cleared). Also
+ * used at run time (dbg 37, net80211 in INIT state), hence the channel_init /
+ * setmode that rebuild net80211's available and active channel sets. */
+static void
+mwx_reg_channels(struct mwx_softc *sc)
+{
+	struct ieee80211com *ic = &sc->sc_ic;
+	unsigned int i;
+	int chan;
+
+	for (i = 0; i <= IEEE80211_CHAN_MAX; i++) {
+		ic->ic_channels[i].ic_freq = 0;
+		ic->ic_channels[i].ic_flags = 0;
+	}
+	if (sc->sc_capa.has_2ghz) {
+		for (i = 0; i < MWX_NUM_2GHZ_CHANNELS; i++) {
+			chan = mwx_channels_2ghz[i];
+			if (!mwx_reg_allowed(sc->sc_reg, 0, chan))
+				continue;
+			ic->ic_channels[chan].ic_freq =
+			    ieee80211_ieee2mhz(chan, IEEE80211_CHAN_2GHZ);
+			ic->ic_channels[chan].ic_flags =
+			    IEEE80211_CHAN_CCK | IEEE80211_CHAN_OFDM |
+			    IEEE80211_CHAN_DYN | IEEE80211_CHAN_2GHZ |
+			    IEEE80211_CHAN_HT20;	/* R9T trace27 */
+		}
+	}
+	if (sc->sc_capa.has_5ghz) {
+		for (i = 0; i < MWX_NUM_5GHZ_CHANNELS; i++) {
+			chan = mwx_channels_5ghz[i];
+			if (!mwx_reg_allowed(sc->sc_reg, 1, chan))
+				continue;
+			ic->ic_channels[chan].ic_freq =
+			    ieee80211_ieee2mhz(chan, IEEE80211_CHAN_5GHZ);
+			ic->ic_channels[chan].ic_flags = IEEE80211_CHAN_A |
+			    IEEE80211_CHAN_HT20 | IEEE80211_CHAN_HT40 |	/* R9T trace27/33 */
+			    IEEE80211_CHAN_VHT20 | IEEE80211_CHAN_VHT40 |
+			    IEEE80211_CHAN_VHT80;
+		}
+	}
+	MWX_DEV_LOG(sc, "regulatory country=%s region=%s\n",
+	    sc->sc_alpha2, mwx_reg_names[sc->sc_reg]);
+}
 #define	DEVDEBUG(x)	((x)->sc_ic.ic_if.if_flags & IFF_DEBUG)
 
 #define MWX_RX_DROP_LOG(sc, reason, rv, rxd0, rxd1, rxd2, rxd3, rxd4) do { \
@@ -2255,32 +2383,11 @@ mwx_preinit(struct mwx_softc *sc)
 	    sc->sc_capa.has_6ghz, sc->sc_capa.num_streams,
 	    sc->sc_capa.antenna_mask);
 
-	if (sc->sc_capa.has_2ghz) {
-		for (i = 0; i < MWX_NUM_2GHZ_CHANNELS; i++) {
-			chan = mwx_channels_2ghz[i];
-			ic->ic_channels[chan].ic_freq =
-			    ieee80211_ieee2mhz(chan, IEEE80211_CHAN_2GHZ);
-			ic->ic_channels[chan].ic_flags =
-			    IEEE80211_CHAN_CCK | IEEE80211_CHAN_OFDM |
-			    IEEE80211_CHAN_DYN | IEEE80211_CHAN_2GHZ |
-			    IEEE80211_CHAN_HT20;	/* R9T trace27 */
-		}
-
-	}
-	if (sc->sc_capa.has_5ghz) {
+	if (sc->sc_capa.has_5ghz)
 		ic->ic_sup_rates[IEEE80211_MODE_11A] =
 		    ieee80211_std_rateset_11a;
-		/* set supported .11a channels */
-		for (i = 0; i < MWX_NUM_5GHZ_CHANNELS; i++) {
-			chan = mwx_channels_5ghz[i];
-			ic->ic_channels[chan].ic_freq =
-			    ieee80211_ieee2mhz(chan, IEEE80211_CHAN_5GHZ);
-			ic->ic_channels[chan].ic_flags = IEEE80211_CHAN_A |
-			    IEEE80211_CHAN_HT20 | IEEE80211_CHAN_HT40 |	/* R9T trace27/33 */
-			    IEEE80211_CHAN_VHT20 | IEEE80211_CHAN_VHT40 |
-			    IEEE80211_CHAN_VHT80;
-		}
-	}
+	/* 0.7.1: only the channels of the selected country (mwx_reg_*) */
+	mwx_reg_channels(sc);
 #ifdef NOTYET
 	/* TODO support for 6GHz */
 	if (sc->sc_capa.has_6ghz) {
@@ -2369,7 +2476,8 @@ mwx_attach(struct device *parent, struct device *self, void *aux)
 	sc->sc_dmat = pa->pa_dmat;
 	sc->sc_intr_mask = MT_INT_RX_DONE_ALL | MT_INT_TX_DONE_ALL |
 	    MT_INT_MCU_CMD;
-	if (PCI_PRODUCT(pa->pa_id) == PCI_PRODUCT_MEDIATEK_MT7922)
+	if (PCI_PRODUCT(pa->pa_id) == PCI_PRODUCT_MEDIATEK_MT7922 ||
+	    PCI_PRODUCT(pa->pa_id) == PCI_PRODUCT_MEDIATEK_RZ616)
 		sc->sc_hwtype = MWX_HW_MT7922;
 	else
 		sc->sc_hwtype = MWX_HW_MT7921;
@@ -2419,6 +2527,13 @@ mwx_attach(struct device *parent, struct device *self, void *aux)
 
 	MWX_DEV_LOG(sc, "attach chip id=0x%04x hwrev=0x%02x interrupt=%s\n",
 	    hwid, hwrev, pci_intr_string(pa->pa_pc, ih));
+	/* The chip id decides, as Linux is_mt7922() (mt76_chip == 0x7922);
+	 * the PCI product id only picks the default. */
+	if (hwid == 0x7922 && sc->sc_hwtype != MWX_HW_MT7922) {
+		MWX_DEV_LOG(sc, "attach chip is MT7922 (pci product 0x%04x)\n",
+		    PCI_PRODUCT(pa->pa_id));
+		sc->sc_hwtype = MWX_HW_MT7922;
+	}
 
 	mwx_set(sc, MT_MCU2HOST_SW_INT_ENA, MT_MCU_CMD_WAKE_RX_PCIE);
 	if (mwx_wfsys_reset(sc) != 0) {
@@ -2452,9 +2567,16 @@ mwx_attach(struct device *parent, struct device *self, void *aux)
 	}
 	MWX_DEV_LOG(sc, "attach DMA resources ready\n");
 
-	/* set regulatory domain to '00' */
-	sc->sc_alpha2[0] = '0';
-	sc->sc_alpha2[1] = '0';
+	/* regulatory domain: boot-arg yyavic-cc=XX, else '00' (0.7.1) */
+	{
+		char cc[4] = { 0 };
+
+		/* "00" parses as the number 0: cc stays empty -> '00' */
+		if (!PE_parse_boot_argn("yyavic-cc", cc, sizeof(cc)))
+			cc[0] = '\0';
+		cc[sizeof(cc) - 1] = '\0';
+		mwx_reg_set(sc, cc);
+	}
 
 	ic->ic_phytype = IEEE80211_T_OFDM;	/* not only, but not used */
 	ic->ic_opmode = IEEE80211_M_STA;	/* default to BSS mode */
@@ -8645,6 +8767,35 @@ mwx_dbg(uint32_t op, uint32_t a, uint32_t b, char *out, size_t outlen)
 		    bni ? bni->ni_vhtcaps : 0, bni ? bni->ni_he_cap_elem.phy_cap_info[0] : 0,
 		    bni ? bni->ni_chw : 0, bw, c,
 		    (bni && bni->ni_chan && bni->ni_chan != IEEE80211_CHAN_ANYC) ? bni->ni_chan->ic_center_freq1 : 0);
+		break;
+	}
+	case 37: {	/* YYavic 0.7.1 country: a=0 show; a='T'<<8|'R' (0x5452), 0x3030 = '00'.
+			 * Only with Wi-Fi off (INIT); used from the next Wi-Fi on. */
+		struct ieee80211com *ic = &sc->sc_ic;
+		unsigned int i, n2 = 0, n5 = 0;
+		const char *note = "";
+		if (a != 0) {
+			if (ic->ic_state != IEEE80211_S_INIT) {
+				note = " (busy: turn Wi-Fi off first)";
+			} else {
+				char cc[3] = { (char)((a >> 8) & 0xff), (char)(a & 0xff), 0 };
+				mwx_reg_set(sc, cc);
+				mwx_reg_channels(sc);
+				ieee80211_channel_init(&ic->ic_if);
+				ieee80211_setmode(ic, (enum ieee80211_phymode)ic->ic_curmode);
+				note = " (set; Wi-Fi on to apply)";
+			}
+		}
+		for (i = 0; i <= IEEE80211_CHAN_MAX; i++) {
+			if (ic->ic_channels[i].ic_flags == 0 || isclr(ic->ic_chan_active, i))
+				continue;
+			if (IEEE80211_IS_CHAN_2GHZ(&ic->ic_channels[i]))
+				n2++;
+			else
+				n5++;
+		}
+		snprintf(out, outlen, "country=%s region=%s active 2g=%u 5g=%u%s",
+		    sc->sc_alpha2, mwx_reg_names[sc->sc_reg], n2, n5, note);
 		break;
 	}
 	case 36:	/* YYavic BSS RLM: a=rx_streams b=ht_op_info (0xff = varsayilan); sonraki baglantida */
