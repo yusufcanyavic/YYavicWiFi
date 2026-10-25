@@ -1,5 +1,5 @@
 #!/bin/sh
-# YYavicWiFi — one-time Bluetooth firmware setup for MediaTek MT7922.
+# YYavicWiFi - one-time Bluetooth firmware setup for MediaTek MT7922.
 # Copyright (C) 2026 Yusufcan Yavic. SPDX-License-Identifier: GPL-3.0-or-later
 #
 # macOS's bluetoothd loads the MT7922 Bluetooth firmware from /etc/bluetool.
