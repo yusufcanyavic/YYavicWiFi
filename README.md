@@ -1,6 +1,6 @@
-# YYavicWiFi — native Wi-Fi 6 for MediaTek MT7922 on macOS
+# YYavicWiFi - native Wi-Fi 6 for MediaTek MT7922 on macOS
 
-**Developer:** Yusufcan Yaviç (Yusufcan Yavic) — YYavic
+**Developer:** Yusufcan Yaviç (Yusufcan Yavic) - YYavic
 
 YYavicWiFi is a single macOS kernel extension that makes a **MediaTek MT7922**
 PCIe card (AMD sells MT7922-based modules as **RZ616**) work as a **native
@@ -41,7 +41,7 @@ macOS Wi-Fi layer were developed in YYavicWiFi by Yusufcan Yaviç.
 | 0.5.3 | 802.11ac, 80 MHz | 430 / 47 Mbit/s |
 | 0.6.0 | 802.11ax (HE), 80 MHz | 576 / 47 |
 | 0.6.4 | + BA 256, A-MSDU | 760 / 47 |
-| **0.7.0** | **802.11ax, 2x2, 160 MHz** (link 2402 Mbit/s) | **913–920 / 46–47** |
+| **0.7.0** | **802.11ax, 2x2, 160 MHz** (link 2402 Mbit/s) | **913-920 / 46-47** |
 
 The same machine on Windows reaches about 900 Mbit/s on this line. Upload is
 limited by the 50 Mbit/s ISP line: faster uploads have not been measured.
@@ -50,7 +50,7 @@ limited by the 50 Mbit/s ISP line: faster uploads have not been measured.
 
 - Native macOS Wi-Fi: network list, password dialog, Keychain, auto-join,
   Wi-Fi on/off, private Wi-Fi address, link details in System Information
-- Wi-Fi 6 (802.11ax / HE), 2 spatial streams, HE-MCS 0–11
+- Wi-Fi 6 (802.11ax / HE), 2 spatial streams, HE-MCS 0-11
 - 20/40/80/**160 MHz** (160 MHz only on MT7922); 5 GHz tested, 2.4 GHz see limitations
 - A-MPDU in both directions (RX BlockAck window 256), RX A-MSDU (up to 11454-byte MPDUs)
 - LDPC, STBC, SU/MU beamformee (as advertised by Linux mt7921)
@@ -61,8 +61,8 @@ limited by the 50 Mbit/s ISP line: faster uploads have not been measured.
 
 | Card | PCI ID | Status |
 |---|---|---|
-| MediaTek MT7922 | `14c3:7922` | **Tested** — the developer's card (AzureWave, subsystem `1a3b:5911`) |
-| AMD RZ616 modules that report `14c3:0616` | `14c3:0616` | Matched since **0.7.1**, **untested** — Linux `mt7921` drives this ID as an MT7922 (MT7922 firmware); the kext does the same |
+| MediaTek MT7922 | `14c3:7922` | **Tested** - the developer's card (AzureWave, subsystem `1a3b:5911`) |
+| AMD RZ616 modules that report `14c3:0616` | `14c3:0616` | Matched since **0.7.1**, **untested** - Linux `mt7921` drives this ID as an MT7922 (MT7922 firmware); the kext does the same |
 | MediaTek MT7921 / MT7921K | `14c3:7961` / `14c3:0608` | Matched, **untested**; stays at 80 MHz like Linux |
 
 The test machine's IDs: Wi-Fi PCI **`14c3:7922`** (chip id register `0x7922`),
@@ -114,7 +114,7 @@ spoofing, boot-arg or plist edit is needed for the IDs above.
    </dict>
    ```
 
-4. Reboot. About 20–30 seconds after the desktop appears the native layer
+4. Reboot. About 20-30 seconds after the desktop appears the native layer
    starts and Wi-Fi shows up in the menu bar. Join your network as usual.
 
 The native interface is `en3`-style (a new Wi-Fi port). The radio also
@@ -137,13 +137,13 @@ kext uses only the channels allowed in all of the regions below.
 
 | Region | Countries | 2.4 GHz | 5 GHz |
 |---|---|---|---|
-| ETSI | EU, `IS` `LI` `NO` `CH` `GB` `TR` | 1–13 | 36–64, 100–140 |
-| FCC | `US` `PR` | 1–11 | 36–64, 100–144, 149–165 |
-| Japan | `JP` | 1–13 | 36–64, 100–140 |
-| China | `CN` | 1–13 | 36–64, 149–165 |
-| Default (no or other country) | — | 1–11 | 36–64 |
+| ETSI | EU, `IS` `LI` `NO` `CH` `GB` `TR` | 1-13 | 36-64, 100-140 |
+| FCC | `US` `PR` | 1-11 | 36-64, 100-144, 149-165 |
+| Japan | `JP` | 1-13 | 36-64, 100-140 |
+| China | `CN` | 1-13 | 36-64, 149-165 |
+| Default (no or other country) | - | 1-11 | 36-64 |
 
-Channels 52–144 are DFS channels: macOS sees them as such, and the radio's scan is
+Channels 52-144 are DFS channels: macOS sees them as such, and the radio's scan is
 passive (it sends no probe requests). Other countries are not in the
 table yet and get the default set (the code still goes to the firmware).
 Pull requests that add countries are welcome, with a source (e.g. the Linux
@@ -207,14 +207,14 @@ AWDL).
 
 ### Setup
 
-1. **Kexts** — in `EFI/OC/Kexts` and `Kernel → Add` (Lilu before BlueToolFixup):
+1. **Kexts** - in `EFI/OC/Kexts` and `Kernel → Add` (Lilu before BlueToolFixup):
    - `YYavicWiFi.kext` (you already have it for Wi-Fi)
    - [Lilu](https://github.com/acidanthera/Lilu) (tested 1.7.3)
    - `BlueToolFixup.kext` from [BrcmPatchRAM](https://github.com/acidanthera/BrcmPatchRAM)
-     (tested 2.7.2) — **required**: without it macOS shows a placeholder
+     (tested 2.7.2) - **required**: without it macOS shows a placeholder
      Broadcom controller and Bluetooth stays off (tested).
 
-2. **Firmware, once** — in Terminal, from the release folder:
+2. **Firmware, once** - in Terminal, from the release folder:
 
    ```sh
    sudo sh Bluetooth/setup-bluetooth.sh
@@ -223,7 +223,7 @@ AWDL).
    It copies `BT_RAM_CODE_MT7922_1_1_hdr.bin` to `/etc/bluetool/` (and does
    nothing if it is already there).
 
-3. **USB map** — the Bluetooth device's USB port must be included in your
+3. **USB map** - the Bluetooth device's USB port must be included in your
    USB port map (as an internal port).
 
 4. Reboot and check System Information → Bluetooth: `Chipset: SRS_7922`,
@@ -242,7 +242,7 @@ values (`1161` / `57560` = `0489:E0D8`) as they are, and add it to
 
 ### Troubleshooting
 
-- Check what the kext did: `ioreg -l | grep yyavic-bt` — e.g.
+- Check what the kext did: `ioreg -l | grep yyavic-bt` - e.g.
   `bluetoothInternalControllerInfo=written …` (first boot) or `=present`.
 - **Chipset `BCM_4350C2`, Transport `UART`, Bluetooth off:** BlueToolFixup
   (or Lilu) is not loaded.
@@ -294,9 +294,9 @@ output and any `/Library/Logs/DiagnosticReports/Kernel-*.panic` file.
   GPL notices in its source files (GPL-2.0-or-later), its `LICENSE`, and the
   BSD/ISC notices of the OpenBSD code. Those notices are authoritative for
   their files.
-- **MediaTek firmware** — embedded in the kext (`include/FwBinary.cpp`) and
+- **MediaTek firmware** - embedded in the kext (`include/FwBinary.cpp`) and
   the Bluetooth firmware `Bluetooth/BT_RAM_CODE_MT7922_1_1_hdr.bin` (from
-  linux-firmware) — is not covered by the GPL; it is redistributed under
+  linux-firmware) - is not covered by the GPL; it is redistributed under
   MediaTek's terms, see `LICENCE.mediatek`.
 - `Bluetooth/MtkBtIdMask.kext` (plist only) and `Bluetooth/setup-bluetooth.sh`: GPL-3.0-or-later.
 - MacKernelSDK is under the Apple Public Source License, see its `LICENSE.txt`.
