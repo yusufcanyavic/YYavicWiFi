@@ -1,7 +1,7 @@
 /*
  * Reworked by Yusufcan Yavic, 2026, for YYavicWiFi (native MT7922 Wi-Fi on macOS).
  * Starting point: the SimpleMtkWlan version of this file by laobamac.
- * Added and changed by Yusufcan Yavic: radio bridge for the native IO80211/Skywalk layer, asynchronous TX kick, scan/join/status/power calls, boot-args.
+ * Added and changed by Yusufcan Yavic: radio bridge for the native IO80211/Skywalk layer, asynchronous TX kick, scan/join/status/power calls, boot-args, Bluetooth NVRAM setup and USB ID mask (0.7.2).
  * See CHANGELOG.md. The original notices below remain in force; these
  * modifications are distributed under the same license as this file.
  */
@@ -33,6 +33,7 @@
 #include <IOKit/IOInterruptController.h>
 #include <IOKit/IOCommandGate.h>
 #include <IOKit/IOInterruptEventSource.h>
+#include <IOKit/IODeviceTreeSupport.h>   /* gIODTPlane (0.7.2 Bluetooth NVRAM) */
 #include <IOKit/network/IONetworkMedium.h>
 /* YYavic radio bridge data hook (mtk80211/openbsd/sys/_mbuf.cpp) */
 extern "C" { extern void (*yy_rx_hook_fn)(void *, void *); extern void *yy_rx_hook_ctx; }
@@ -404,6 +405,77 @@ void YYavicMtkWlan::associateSSID(const char *ssid, const char *pwd)
     }
 }
 
+/*
+ * Bluetooth (0.7.2, Yusufcan Yavic). macOS's bluetoothd uses a USB Bluetooth
+ * controller (the MT7922's, which the IOKit personalities in Info.plist make
+ * look like 0489:E0D8, bluetoothd's own MT7922 ID) only when it believes the
+ * Mac has no internal controller and no failed dongle. These are the same two
+ * NVRAM values as the OpenCore entries in README 0.7.0/0.7.1; they are written
+ * only for an MT7922 and only when missing or different. Off: -yyavicnobt.
+ */
+static void yy_bt_nvram(MtkHalService *hal, IOService *self)
+{
+    static const struct {
+        const char *key;
+        unsigned int len;
+    } vars[] = {
+        { "7C436110-AB2A-4BBB-A880-FE41995C9F82:bluetoothInternalControllerInfo", 14 },
+        { "7C436110-AB2A-4BBB-A880-FE41995C9F82:bluetoothExternalDongleFailed", 1 },
+    };
+    static const uint8_t zeros[14] = { 0 };
+    uint32_t v = 0;
+    const char *chip;
+    IORegistryEntry *nv;
+    unsigned int i;
+    char res[160];
+    size_t rl = 0;
+
+    /* Result also as the registry property "yyavic-bt" (the trace buffer is
+     * full of firmware lines by now): ioreg -l | grep yyavic-bt */
+    if (PE_parse_boot_argn("-yyavicnobt", &v, sizeof(v))) {
+        smtw_trace("BT: NVRAM setup off (-yyavicnobt)\n");
+        self->setProperty("yyavic-bt", "off (-yyavicnobt)");
+        return;
+    }
+    chip = hal != NULL && hal->getDriverInfo() != NULL ? hal->getDriverInfo()->getFirmwareVersion() : NULL;
+    if (chip == NULL || strcmp(chip, "MT7922") != 0) {
+        smtw_trace("BT: NVRAM setup skipped (chip %s)\n", chip ? chip : "?");
+        self->setProperty("yyavic-bt", "skipped (not MT7922)");
+        return;
+    }
+    nv = IORegistryEntry::fromPath("/options", gIODTPlane);
+    if (nv == NULL) {
+        smtw_trace("BT: NVRAM /options not found\n");
+        self->setProperty("yyavic-bt", "NVRAM /options not found");
+        return;
+    }
+    for (i = 0; i < sizeof(vars) / sizeof(vars[0]); i++) {
+        OSObject *cur = nv->copyProperty(vars[i].key);
+        OSData *d = OSDynamicCast(OSData, cur);
+        bool same = d != NULL && d->getLength() == vars[i].len &&
+            memcmp(d->getBytesNoCopy(), zeros, vars[i].len) == 0;
+        if (cur != NULL)
+            cur->release();
+        if (same) {
+            smtw_trace("BT: NVRAM %s already set\n", vars[i].key + 37);
+            rl += snprintf(res + rl, sizeof(res) - rl, "%s%s=present", rl ? " " : "", vars[i].key + 37);
+            if (rl >= sizeof(res))
+                rl = sizeof(res) - 1;
+            continue;
+        }
+        OSData *nd = OSData::withBytes(zeros, vars[i].len);
+        bool ok = nd != NULL && nv->setProperty(vars[i].key, nd);
+        if (nd != NULL)
+            nd->release();
+        smtw_trace("BT: NVRAM %s %s\n", vars[i].key + 37, ok ? "set" : "FAILED");
+        rl += snprintf(res + rl, sizeof(res) - rl, "%s%s=%s", rl ? " " : "", vars[i].key + 37, ok ? "written" : "FAILED");
+        if (rl >= sizeof(res))
+            rl = sizeof(res) - 1;
+    }
+    nv->release();
+    self->setProperty("yyavic-bt", res);
+}
+
 bool YYavicMtkWlan::start(IOService *provider)
 {
     int boot_value = 0;
@@ -493,6 +565,7 @@ bool YYavicMtkWlan::start(IOService *provider)
         releaseAll();
         { smtw_trace("start FAIL at line %d\n", __LINE__); smtw_publish(); return false; }
     }
+    yy_bt_nvram(fHalService, this);
     if (!attachInterface((IONetworkInterface **)&fNetIf, true)) {
         XYLog("attach to interface fail\n");
         fHalService->detach(pciNub);

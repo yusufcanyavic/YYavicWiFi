@@ -16,6 +16,8 @@ kept in the source files:
 - **Linux `mt76` / `mt7921`** (MediaTek, Felix Fietkau, Lorenzo Bianconi and
   contributors) — reference for Wi-Fi 6 capabilities, firmware command layouts,
   ring sizes and the 160 MHz channel context.
+- **Linux `btusb`** (Bluetooth USB driver contributors) — the list of MT7922 /
+  MT7922A Bluetooth USB IDs the kext masks.
 - **acidanthera** — MacKernelSDK; Lilu and BlueToolFixup (BrcmPatchRAM), used
   for Bluetooth (not included, see README).
 - **MediaTek Inc.** — MT7922 Wi-Fi and Bluetooth firmware (`LICENCE.mediatek`).

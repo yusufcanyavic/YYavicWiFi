@@ -6,6 +6,21 @@ MT7922) with a Wi-Fi 6 router on 5 GHz channel 56, over an ISP line of
 1 Gbit/s download / 50 Mbit/s upload (uploads are capped by the line).
 "nQ" = macOS `networkQuality -I en3` download.
 
+## 0.7.2 — 2026-10-26 — Bluetooth set up by the kext
+
+- The kext now does the Bluetooth USB ID mask itself: the 27 MT7922 /
+  MT7922A Bluetooth IDs in Linux `btusb` (incl. `13D3:3585`) appear to
+  macOS's `bluetoothd` as `0489:E0D8`, its own MT7922 ID. `MtkBtIdMask.kext`
+  is only needed for IDs that are not in that list.
+- On an MT7922 card the kext sets the NVRAM values
+  `bluetoothInternalControllerInfo` / `bluetoothExternalDongleFailed` at boot
+  (only when missing or different); no OpenCore NVRAM entries needed.
+  Result in the registry property `yyavic-bt`; off with `-yyavicnobt`.
+- `Bluetooth/setup-bluetooth.sh`: one-time firmware copy to `/etc/bluetool`.
+- Tested: with `MtkBtIdMask.kext` and the OpenCore NVRAM entries removed,
+  Bluetooth comes up as `SRS_7922` over USB; without BlueToolFixup it does
+  not (so BlueToolFixup stays required).
+
 ## 0.7.1 — 2026-10-26 — RZ616 ID, country setting
 
 - **AMD RZ616 `14c3:0616`** is matched and run as an MT7922 (MT7922

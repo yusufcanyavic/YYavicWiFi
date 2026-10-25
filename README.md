@@ -55,7 +55,7 @@ limited by the 50 Mbit/s ISP line: faster uploads have not been measured.
 - A-MPDU in both directions (RX BlockAck window 256), RX A-MSDU (up to 11454-byte MPDUs)
 - LDPC, STBC, SU/MU beamformee (as advertised by Linux mt7921)
 - WPA2-Personal (CCMP, hardware encryption)
-- Bluetooth works natively through macOS itself with the files in `Bluetooth/` (see "Bluetooth" below)
+- Bluetooth works natively through macOS itself: the kext sets it up, plus BlueToolFixup and a one-time firmware copy (see "Bluetooth" below)
 
 ## Supported hardware
 
@@ -160,6 +160,7 @@ Check the active country: `./mtkscan dbg 37 0` (see Diagnostics).
 | Boot-arg | Effect |
 |---|---|
 | `yyavic-cc=XX` | Country / regulatory region (see above); default: common channels only |
+| `-yyavicnobt` | Do not set the Bluetooth NVRAM values (see "Bluetooth") |
 | `-yyavicoff` | Do not start the native layer (radio only, no macOS Wi-Fi) |
 | `-yyavicnohe` | Disable 802.11ax (connect as 802.11ac) |
 | `-yyavicnodrvavail` | Do not post the boot-time "driver available" event |
@@ -184,68 +185,70 @@ Check the active country: `./mtkscan dbg 37 0` (see Diagnostics).
 
 ## Bluetooth
 
-The MT7922's Bluetooth is a separate USB device and is **not** driven by
-`YYavicWiFi.kext`. On macOS 15 USB Bluetooth adapters are run by macOS's own
-`bluetoothd`, which already has a MediaTek MT7922 path — but it only takes it
-for the USB ID `0489:E0D8`, needs the MediaTek firmware file in
-`/etc/bluetool/`, and skips USB adapters entirely when it believes the Mac has
-an internal controller. The files in `Bluetooth/` and the steps below make
-macOS use that path natively.
+The MT7922's Bluetooth is a separate USB device. On macOS 15, USB Bluetooth
+adapters are run by macOS's own `bluetoothd`, which already has a MediaTek
+MT7922 path, but only for the USB ID `0489:E0D8`, with the MediaTek firmware
+in `/etc/bluetool/`, and only when it believes the Mac has no internal
+controller. Since **0.7.2** `YYavicWiFi.kext` takes care of the first and
+the last point itself:
+
+- it makes the MT7922 Bluetooth USB IDs known to Linux (`btusb`: 27 IDs,
+  e.g. `13D3:3585`, `13D3:3610`, `0489:E0E2`, `0489:E0F6`, `04CA:3804`,
+  `0E8D:223C`, `35F5:7922`) appear as `0489:E0D8`;
+- on an MT7922 card it sets the NVRAM values `bluetoothInternalControllerInfo`
+  (14 zero bytes) and `bluetoothExternalDongleFailed` (`00`) at boot, only
+  when they are missing or different. Boot-arg `-yyavicnobt` turns this off.
 
 **Tested on the test machine:** Bluetooth on, System Information shows
 `Chipset: SRS_7922`, `Transport: USB`; phone pairing works and survives
-reboots. **Not tested:** Bluetooth audio (headphones), Handoff / Continuity.
-AirDrop is not supported (it needs Wi-Fi AWDL).
+reboots. **Not tested:** Bluetooth audio (headphones), Handoff / Continuity,
+other Bluetooth IDs than `13D3:3585`. AirDrop is not supported (it needs Wi-Fi
+AWDL).
 
 ### Setup
 
-1. **Kexts** — add to `EFI/OC/Kexts` and `Kernel → Add` (Lilu first):
+1. **Kexts** — in `EFI/OC/Kexts` and `Kernel → Add` (Lilu before BlueToolFixup):
+   - `YYavicWiFi.kext` (you already have it for Wi-Fi)
    - [Lilu](https://github.com/acidanthera/Lilu) (tested 1.7.3)
-   - `BlueToolFixup.kext` from [BrcmPatchRAM](https://github.com/acidanthera/BrcmPatchRAM) (tested 2.7.2)
-   - `Bluetooth/MtkBtIdMask.kext` (included)
+   - `BlueToolFixup.kext` from [BrcmPatchRAM](https://github.com/acidanthera/BrcmPatchRAM)
+     (tested 2.7.2) — **required**: without it macOS shows a placeholder
+     Broadcom controller and Bluetooth stays off (tested).
 
-2. **Check your card's Bluetooth USB ID** — System Information → USB → the
-   MediaTek / `Wireless_Device` entry → Vendor ID and Product ID.
-   - `0x13D3` / `0x3585` (AzureWave, the tested card): use `MtkBtIdMask.kext` as it is.
-   - `0x0489` / `0xE0D8`: you don't need `MtkBtIdMask.kext`.
-   - Anything else: edit `MtkBtIdMask.kext/Contents/Info.plist` and set
-     `idVendor` / `idProduct` (the matching keys, **decimal**) to your ID,
-     e.g. `0x13D3` = `5075`, `0x3585` = `13701`. Leave the
-     `IOProviderMergeProperties` values (`1161` / `57560` = `0489:E0D8`) as they are.
-
-3. **Firmware** — copy the MediaTek Bluetooth firmware where `bluetoothd`
-   looks for it (needs your password):
+2. **Firmware, once** — in Terminal, from the release folder:
 
    ```sh
-   sudo mkdir -p /etc/bluetool
-   sudo cp Bluetooth/BT_RAM_CODE_MT7922_1_1_hdr.bin /etc/bluetool/
+   sudo sh Bluetooth/setup-bluetooth.sh
    ```
 
-4. **NVRAM** — in `config.plist`, `NVRAM → Add →
-   7C436110-AB2A-4BBB-A880-FE41995C9F82` add:
+   It copies `BT_RAM_CODE_MT7922_1_1_hdr.bin` to `/etc/bluetool/` (and does
+   nothing if it is already there).
 
-   | Key | Type | Value |
-   |---|---|---|
-   | `bluetoothInternalControllerInfo` | Data | `0000000000000000000000000000` (14 zero bytes) |
-   | `bluetoothExternalDongleFailed` | Data | `00` |
-
-   and add both key names to `NVRAM → Delete →
-   7C436110-AB2A-4BBB-A880-FE41995C9F82`, so OpenCore sets them on every boot.
-
-5. **USB map** — the Bluetooth device's USB port must be included in your
+3. **USB map** — the Bluetooth device's USB port must be included in your
    USB port map (as an internal port).
 
-6. Reboot and check System Information → Bluetooth: `Chipset: SRS_7922`,
+4. Reboot and check System Information → Bluetooth: `Chipset: SRS_7922`,
    `Transport: USB`, `State: On`.
+
+**Updating from 0.7.0 / 0.7.1:** `MtkBtIdMask.kext` and the two
+`bluetooth…` entries in `NVRAM → Add` are no longer needed; you can remove
+them (keeping them does no harm).
+
+**Your Bluetooth ID is not in the list?** (System Information → USB → the
+MediaTek / `Wireless_Device` entry.) Use `Bluetooth/MtkBtIdMask.kext`: set
+`idVendor` / `idProduct` (the matching keys, **decimal**) to your ID, e.g.
+`0x13D3` = `5075`, `0x3585` = `13701`, leave the `IOProviderMergeProperties`
+values (`1161` / `57560` = `0489:E0D8`) as they are, and add it to
+`Kernel → Add`. Please also report the ID on GitHub so it can be added.
 
 ### Troubleshooting
 
+- Check what the kext did: `ioreg -l | grep yyavic-bt` — e.g.
+  `bluetoothInternalControllerInfo=written …` (first boot) or `=present`.
+- **Chipset `BCM_4350C2`, Transport `UART`, Bluetooth off:** BlueToolFixup
+  (or Lilu) is not loaded.
 - **Bluetooth off / not available, log repeats `HCI initialization failed`:**
-  `MtkBtIdMask.kext` is not loaded or does not match your USB ID (step 2).
-- **No Bluetooth at all, no errors:** the NVRAM values from step 4 are missing.
-  To test without rebooting:
-  `sudo nvram bluetoothInternalControllerInfo=%00%00%00%00%00%00%00%00%00%00%00%00%00%00`
-  — `bluetoothd` picks it up within about 30 seconds.
+  your Bluetooth USB ID is not masked (see above), or the firmware file is
+  missing (step 2).
 - Check the state any time with `system_profiler SPBluetoothDataType`.
 
 ## Building from source
@@ -255,7 +258,7 @@ The MacKernelSDK (acidanthera) copy is included in `Source/YYavicMtkWlan/MacKern
 
 ```sh
 cd Source
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer YY_VERSION=0.7.1 ./build-yyavic.sh release
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer YY_VERSION=0.7.2 ./build-yyavic.sh release
 # result: Source/build-release/YYavicWiFi.kext
 ```
 
@@ -295,7 +298,7 @@ output and any `/Library/Logs/DiagnosticReports/Kernel-*.panic` file.
   the Bluetooth firmware `Bluetooth/BT_RAM_CODE_MT7922_1_1_hdr.bin` (from
   linux-firmware) — is not covered by the GPL; it is redistributed under
   MediaTek's terms, see `LICENCE.mediatek`.
-- `Bluetooth/MtkBtIdMask.kext` (plist only): GPL-3.0-or-later.
+- `Bluetooth/MtkBtIdMask.kext` (plist only) and `Bluetooth/setup-bluetooth.sh`: GPL-3.0-or-later.
 - MacKernelSDK is under the Apple Public Source License, see its `LICENSE.txt`.
 
 See `CREDITS.md` for the people whose work this builds on.
