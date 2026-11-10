@@ -6,6 +6,42 @@ MT7922) with a Wi-Fi 6 router on 5 GHz channel 56, over an ISP line of
 1 Gbit/s download / 50 Mbit/s upload (uploads are capped by the line).
 "nQ" = macOS `networkQuality -I en3` download.
 
+## 0.8.0 - 2026-11-10 - macOS 26 (Tahoe) support
+
+- **macOS 26.7.2 (25G332) is supported**, with its own kext
+  (`Kext/macOS26`). macOS 15.8.1 keeps `Kext/macOS15`, which is the unchanged,
+  tested 0.7.3 binary. Use the kext of your macOS only; on any other build
+  the native layer disables itself.
+- Native layer ported to macOS 26's IO80211Family / IOSkywalkFamily (their
+  class layouts, message ids and the data path changed: one more virtual
+  slot in `IOSkywalkNetworkInterface`, a longer `IO80211InfraProtocol`,
+  different scan result and link-state calls, and so on).
+- **Speed on macOS 26:** 921 / 47 Mbit/s (Chrome speedtest, 160 MHz, 802.11ax).
+  The first working port ran at only 40-48 Mbit/s. Cause: the radio copies
+  every received packet from a bounce buffer, and that buffer was allocated
+  uncached; reading it cost about 200 us per packet (CPU copy of 1500 bytes
+  from uncached memory). The data bounce buffers are now cached (x86 DMA is
+  coherent), and single-mbuf packets are copied with `memcpy`. Loaded latency
+  fell from about 90 ms to 4 ms.
+- **The link no longer drops every 60 s on macOS 26.** IO80211Family's
+  `WCLNetManager` leaves the network when it has seen no link-quality (LQM)
+  update for 60 s (`handleMissedBeacons`). The native layer now posts that
+  update every 4 s while associated. Before, the Wi-Fi was gone for about 6 s
+  once a minute.
+- **Bluetooth on macOS 26:** works with an unmodified BlueToolFixup plus a
+  one-byte change (script `Bluetooth/setup-bluetooth.sh`, or an OpenCore
+  `Kernel → Patch` entry; see README, "macOS 26: one BlueToolFixup byte").
+  Without it `bluetoothd` uses the generic USB path and the MT7922 never gets
+  its MediaTek power-on / firmware commands.
+- `mtkscan dbg 39` (RX dequeue timing), `dbg 40` (deauth counters), `dbg 41`
+  (last net80211 state changes, with caller).
+- `setup-bluetooth.sh` also handles BlueToolFixup on macOS 26;
+  new `patch-bluetoolfixup.sh` (`--check`, `--revert`).
+- Known on macOS 26: the "ax"/160 MHz label in System Information (as on
+  macOS 15), "Private Wi-Fi address: Off" (as on macOS 15), roaming requests
+  answered "not supported". Sleep/wake, WPA3 and Bluetooth audio were not
+  tested.
+
 ## 0.7.3 - 2026-10-26 - faster Wi-Fi at boot
 
 - The first join after boot no longer fails. macOS sets the network's private

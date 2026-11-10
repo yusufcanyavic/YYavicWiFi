@@ -315,6 +315,9 @@ IOReturn YYavicAirWiFiLayerPCI::setProperties(OSObject *properties)
 
 void YYavicAirWiFiLayerPCI::armNow(int mode, const char *by)
 {
+#ifdef YY_OS26
+    mode = 1;       /* macOS 26: Skywalk mode only (legacy mode reads 15.8.1 object offsets) */
+#endif
     if (!fArmed)
         gYYMode = mode;
     yy_trace("PCI: arm mode = %s\n", gYYMode == 0 ? "legacy" : "skywalk");
@@ -425,8 +428,20 @@ static int yy_os_layout_ok(char *why, size_t whylen)
     int dummy = 0;
     if (PE_parse_boot_argn("-yyavicnoverify", &dummy, sizeof(dummy)))
         return 1;
-    if (version_major != 24 || version_minor != 6) {
-        snprintf(why, whylen, "Darwin %d.%d (needs 24.6, macOS 15.8.1 24H32)", version_major, version_minor);
+#ifdef YY_OS26
+#define YY_OS_MAJOR   25
+#define YY_OS_MINOR   6
+#define YY_OS_BUILD   "25G332"
+#define YY_OS_NAME    "macOS 26.7.2"
+#else
+#define YY_OS_MAJOR   24
+#define YY_OS_MINOR   6
+#define YY_OS_BUILD   "24H32"
+#define YY_OS_NAME    "macOS 15.8.1"
+#endif
+    if (version_major != YY_OS_MAJOR || version_minor != YY_OS_MINOR) {
+        snprintf(why, whylen, "Darwin %d.%d (needs %d.%d, " YY_OS_NAME " " YY_OS_BUILD ")", version_major, version_minor,
+                 YY_OS_MAJOR, YY_OS_MINOR);
         return 0;
     }
     IORegistryEntry *root = IORegistryEntry::getRegistryRoot();	/* not retained */
@@ -435,9 +450,9 @@ static int yy_os_layout_ok(char *why, size_t whylen)
         snprintf(why, whylen, "OS build not published yet");
         return -1;
     }
-    if (b->isEqualTo("24H32"))
+    if (b->isEqualTo(YY_OS_BUILD))
         return 1;
-    snprintf(why, whylen, "OS build %s (needs 24H32, macOS 15.8.1)", b->getCStringNoCopy());
+    snprintf(why, whylen, "OS build %s (needs " YY_OS_BUILD ", " YY_OS_NAME ")", b->getCStringNoCopy());
     return 0;
 }
 
@@ -461,11 +476,11 @@ static void yy_autoarm_fire(thread_call_param_t p0, thread_call_param_t)
         if (ok != 1) {
             yy_trace("PCI: NOT arming, unsupported macOS: %s\n", why);
             IOLog("YYavicWiFi: native Wi-Fi layer disabled, unsupported macOS: %s\n", why);
-            pci->setProperty("yy-state", "disabled: unsupported macOS (needs 15.8.1)");
+            pci->setProperty("yy-state", "disabled: unsupported macOS (needs " YY_OS_NAME ")");
             return;
         }
         if (osWaits != 0)
-            yy_trace("PCI: OS build 24H32 published after %u waits\n", osWaits);
+            yy_trace("PCI: OS build " YY_OS_BUILD " published after %u waits\n", osWaits);
     }
     gYYAutoTries++;
     OSDictionary *m = IOService::serviceMatching("YYavicMtkWlan");
@@ -547,7 +562,18 @@ static YYavicAirWiFiLayer *yy_ctrl_of(IO80211SkywalkInterface *);
  * which it accepts while not associated (WCL leaves before joining). Anything
  * else (associated, old radio) is refused that way.
  */
+#ifdef YY_OS26
+IOReturn YYavicAirWiFiLayerInterface::setMacAddress(mloAddrArray &mlo)
+{
+    ether_addr a;
+    memcpy(a.octet, (const void *)&mlo, sizeof(a.octet));
+    return setMacAddressSingle(a);
+}
+
+IOReturn YYavicAirWiFiLayerInterface::setMacAddressSingle(ether_addr &a)
+#else
 IOReturn YYavicAirWiFiLayerInterface::setMacAddress(ether_addr &a)
+#endif
 {
     YYavicAirWiFiLayer *ctl = yy_ctrl_of(this);
     IOReturn r = kIOReturnNotPermitted;
@@ -635,11 +661,16 @@ IOReturn YYavicAirWiFiLayerInterface::getWCL_TRAFFIC_COUNTERS(apple80211_wcl_tra
 IOReturn YYavicAirWiFiLayerInterface::setWCL_LEAVE_NETWORK(apple80211_leave_network *)
 {
     yy_trace("IF: setWCL_LEAVE_NETWORK\n");
+    yy_trace_bt("LEAVE");
     YYavicAirWiFiLayer *ctl = yy_ctrl_of(this);
     return ctl ? ctl->leaveNetwork() : kIOReturnSuccess;
 }
 
+#ifdef YY_OS26
+#include "YYavicAirWiFiLayerInterface_stubs26.cpp.inc"
+#else
 #include "YYavicAirWiFiLayerInterface_stubs.cpp.inc"
+#endif
 
 static YYavicAirWiFiLayer *yy_ctrl_of(IO80211SkywalkInterface *)
 {
@@ -686,7 +717,11 @@ IOReturn YYavicAirWiFiLayerInterface::setWCL_ASSOCIATE(apple80211AssocCandidates
     return ctl ? ctl->joinStart((const uint8_t *)c) : kIOReturnNotReady;
 }
 
+#ifdef YY_OS26
+IOReturn YYavicAirWiFiLayerInterface::setWCL_JOIN_ABORT(apple80211_wcl_abort_join *)
+#else
 IOReturn YYavicAirWiFiLayerInterface::setWCL_JOIN_ABORT(void *)
+#endif
 {
     yy_trace("IF: setWCL_JOIN_ABORT\n");
     YYavicAirWiFiLayer *ctl = yy_ctrl_of(this);
@@ -904,14 +939,24 @@ IOReturn yy_skw_txsub_requestDequeue(void *q, void *ctx, uint32_t flags)
 IOReturn yy_skw_setLinkLayerAddress(void *self, ether_addr *ea)
     __asm("__ZN26IOSkywalkEthernetInterface19setLinkLayerAddressEP10ether_addr");
 /* IO80211LinkState: 1 = down, 2 = up (AppleBCMWLANNetAdapter::setLinkDown/setLinkUp) */
+#ifdef YY_OS26
+/* macOS 26: one more unsigned argument (IO80211InfraInterface slot 371, KC 25G332) */
+bool yy_infra_setLinkState(void *self, uint32_t state, uint32_t a, bool debounce, uint32_t reason, uint32_t reason2)
+    __asm("__ZN21IO80211InfraInterface12setLinkStateE16IO80211LinkStatejbjj");
+#else
 bool yy_infra_setLinkState(void *self, uint32_t state, uint32_t a, bool debounce, uint32_t reason)
     __asm("__ZN21IO80211InfraInterface12setLinkStateE16IO80211LinkStatejbj");
+#endif
 }
 extern "C" uint32_t yy_radio_tx_batch(IOService *radio, mbuf_t head);   /* radio part, same kext */
 #define YY_TX_HEADROOM    128
 #define YY_POOL_NOSLEEP   1        /* allocatePacket option bit 0 -> kern_pbufpool_alloc_nosleep */
 #define YY_BATCH          32       /* < queue capacity (enqueuePackets needs n < capacity) */
+#ifdef YY_OS26
+#define YY_RXQ_MAX        8192      /* macOS 26: bursts + 100 ms drain stalls overflowed 1024 */
+#else
 #define YY_RXQ_MAX        1024
+#endif
 
 #define YY_SKW_QCAP     256
 #define YY_SKW_BUFSIZE  2048
@@ -981,9 +1026,15 @@ static void yy_bsd_verify(YYavicAirWiFiLayer *c)
         }
         it->release();
     }
+#ifdef YY_OS26
+    /* debug-only raw reads of the 15.8.1 object layout: IOSkywalkNetworkInterface grew by 16 bytes
+     * in macOS 26, so +0xb8 is not known to be a pointer there; do not dereference it. */
+    void *a8 = nullptr, *b8 = nullptr, *c0 = nullptr, *b8w0 = nullptr;
+#else
     uint8_t *b = (uint8_t *)netif;
     void *a8 = *(void **)(b + 0xa8), *b8 = *(void **)(b + 0xb8), *c0 = *(void **)(b + 0xc0);
     void *b8w0 = b8 ? *(void **)b8 : nullptr;
+#endif
     OSObject *defer = netif->copyProperty("IODeferBSDAttach");
     OSObject *unit = netif->copyProperty("IOInterfaceUnit");
     OSObject *bsd = netif->copyProperty("BSD Name");
@@ -1196,6 +1247,11 @@ bool YYavicAirWiFiLayer::init(OSDictionary *props)
     fRxHead = fRxTail = nullptr;
     fRxQLen = 0;
     fRxES = nullptr;
+    fRxLoop = nullptr;
+    fDropQFull = fDropDetached = fDropAlloc = fDropPrep = fDropCopy = fDropEnq = 0;
+    fRxQMax = fDrainMaxMs = fGapMaxMs = 0;
+    fLastDrainEnd = 0;
+    fPhAllocMs = fPhCopyMs = fPhEnqMs = fPhLockMs = 0;
     fSymTx = nullptr;
     fDataAttached = false;
     fRadioMacSet = false;
@@ -1366,8 +1422,13 @@ bool YYavicAirWiFiLayer::setupSkywalkDatapath()
 {
     YYSkwPoolOptions opts;
     bzero(&opts, sizeof(opts));
+#ifdef YY_OS26
+    opts.packetCount = 16 * YY_SKW_QCAP;
+    opts.bufferCount = 16 * YY_SKW_QCAP;
+#else
     opts.packetCount = 4 * YY_SKW_QCAP;
     opts.bufferCount = 4 * YY_SKW_QCAP;
+#endif
     opts.bufferSize = YY_SKW_BUFSIZE;
     opts.maxBuffersPerPacket = 1;
     /* AppleBCMWLANSkywalkPacketPool::initWithName passes packetType 1 and
@@ -1498,7 +1559,19 @@ IOReturn YYavicAirWiFiLayer::selectMedium(const IONetworkMedium *medium)
  * +0x3c flags (0x4000 RSSI valid, 0x2000 SNR valid, 0x1000 noise valid).
  * AppleChannelSpec_t: chan | bw (0x1000 = 20 MHz) | band (0 = 2.4, 0xc000 = 5 GHz).
  */
+#ifdef YY_OS26
+/* macOS 26 (25G332): scan results are message 201 (WCLMngFrameRouter::scanResultEventHandler); the
+ * BeaconMetaData header is 0x44 bytes: the flags word moved +0x3c -> +0x40 and a byte at +0x3c is
+ * read only when flags bit 18 is set (IO80211BSSBeacon::setBeaconDataFromMsg, producer
+ * AppleBCMWLANBSSBeacon::getBeaconMsgFromWLBSSInfo). IEs follow at +0x44. */
+#define YY_MSG_WCL_BEACON     201
+#define YY_BCN_HDR            0x44
+#define YY_BCN_FLAGS          0x40
+#else
 #define YY_MSG_WCL_BEACON     206
+#define YY_BCN_HDR            0x40
+#define YY_BCN_FLAGS          0x3c
+#endif
 #define YY_MSG_WCL_SCAN_DONE  237
 #define YY_SCAN_MAX           64
 #define YY_SCAN_WAIT_MS       2500
@@ -1806,9 +1879,9 @@ IOReturn YYavicAirWiFiLayer::startScan()
 /* BeaconMetaData (0x40) + IEs for one BSS; returns total length (<= 0x440). */
 static uint32_t yy_build_beacon(const struct yy_radio_bss *b, uint8_t *msg, uint16_t spec_override = 0)
 {
-    uint8_t *ie = msg + 0x40;
+    uint8_t *ie = msg + YY_BCN_HDR;
     uint32_t il = 0;
-    bzero(msg, 0x40 + 0x400);
+    bzero(msg, YY_BCN_HDR + 0x400);
     /* SSID */
     ie[il++] = 0; ie[il++] = b->ssid_len;
     memcpy(ie + il, b->ssid, b->ssid_len); il += b->ssid_len;
@@ -1849,13 +1922,13 @@ static uint32_t yy_build_beacon(const struct yy_radio_bss *b, uint8_t *msg, uint
     *(uint16_t *)(msg + 0x36) = (uint16_t)(b->rssi_dbm - YY_NOISE_DBM);
     *(uint16_t *)(msg + 0x38) = b->intval;
     *(uint16_t *)(msg + 0x3a) = b->capinfo;
-    *(uint32_t *)(msg + 0x3c) = 0x7000;
-    return 0x40 + il;
+    *(uint32_t *)(msg + YY_BCN_FLAGS) = 0x7000;
+    return YY_BCN_HDR + il;
 }
 
 void YYavicAirWiFiLayer::scanTimerFired()
 {
-    static uint8_t msg[0x40 + 0x400];
+    static uint8_t msg[YY_BCN_HDR + 0x400];
     fScanBusy = false;
     IOService *r = radio();
     uint32_t n = YY_SCAN_MAX, posted = 0;
@@ -1900,6 +1973,7 @@ void YYavicAirWiFiLayer::scanTimerFired()
  *   0x52 current channel (apple80211_channel)              BssManager::setCurrentBSS
  */
 #define YY_MSG_LINK            0xd8
+#define YY_MSG_LQM             0x27
 #define YY_MSG_SET_SSID        0xd4
 #define YY_MSG_CONNECT_DONE    0xd5
 #define YY_MSG_CUR_CHANNEL     0x52
@@ -2161,6 +2235,7 @@ void YYavicAirWiFiLayer::rxEnqueueFromRadio(mbuf_t m)
     if (fRxQLen >= YY_RXQ_MAX) {
         drop = true;
         fRxDrop++;
+        fDropQFull++;
     } else {
         mbuf_setnextpkt(m, nullptr);
         if (fRxTail != nullptr)
@@ -2169,6 +2244,8 @@ void YYavicAirWiFiLayer::rxEnqueueFromRadio(mbuf_t m)
             fRxHead = m;
         fRxTail = m;
         fRxQLen++;
+        if (fRxQLen > fRxQMax)
+            fRxQMax = fRxQLen;
     }
     IOLockUnlock(l);
     if (drop)
@@ -2180,14 +2257,34 @@ void YYavicAirWiFiLayer::rxEnqueueFromRadio(mbuf_t m)
 void YYavicAirWiFiLayer::rxDrain()
 {
     uint64_t t0 = mach_absolute_time();
+    uint64_t ns;
+    if (fLastDrainEnd != 0) {                       /* gap since the previous drain ended */
+        absolutetime_to_nanoseconds(t0 - fLastDrainEnd, &ns);
+        if (ns / 1000000 > fGapMaxMs)
+            fGapMaxMs = (uint32_t)(ns / 1000000);
+    }
     rxDrainBody();
-    fRxAbs += mach_absolute_time() - t0;
+    uint64_t t1 = mach_absolute_time();
+    fRxAbs += t1 - t0;
+    fLastDrainEnd = t1;
+    absolutetime_to_nanoseconds(t1 - t0, &ns);
+    if (ns / 1000000 > fDrainMaxMs)
+        fDrainMaxMs = (uint32_t)(ns / 1000000);
+}
+
+static inline uint32_t yy_ms_since(uint64_t t0)
+{
+    uint64_t ns;
+    absolutetime_to_nanoseconds(mach_absolute_time() - t0, &ns);
+    return (uint32_t)(ns / 1000000);
 }
 
 void YYavicAirWiFiLayer::rxDrainBody()
 {
     for (;;) {
+        uint64_t tl = mach_absolute_time();
         IOLockLock(fRxLock);
+        { uint32_t w = yy_ms_since(tl); if (w > fPhLockMs) fPhLockMs = w; }
         mbuf_t list = fRxHead;
         fRxHead = fRxTail = nullptr;
         fRxQLen = 0;
@@ -2202,9 +2299,18 @@ void YYavicAirWiFiLayer::rxDrainBody()
             mbuf_setnextpkt(m, nullptr);
             size_t len = mbuf_pkthdr_len(m);
             void *p = nullptr;
-            if (!fDataAttached || fRxCompQ == nullptr || fPool == nullptr || len < 14 || len > YY_SKW_BUFSIZE ||
-                yy_skw_pool_allocatePacket(fPool, &p, YY_POOL_NOSLEEP) != kIOReturnSuccess || p == nullptr) {
+            if (!fDataAttached || fRxCompQ == nullptr || fPool == nullptr || len < 14 || len > YY_SKW_BUFSIZE) {
                 fRxDrop++;
+                fDropDetached++;
+                mbuf_freem(m);
+                continue;
+            }
+            uint64_t ta = mach_absolute_time();
+            IOReturn ar = yy_skw_pool_allocatePacket(fPool, &p, YY_POOL_NOSLEEP);
+            { uint32_t w = yy_ms_since(ta); if (w > fPhAllocMs) fPhAllocMs = w; }
+            if (ar != kIOReturnSuccess || p == nullptr) {
+                fRxDrop++;
+                fDropAlloc++;
                 mbuf_freem(m);
                 continue;
             }
@@ -2212,12 +2318,14 @@ void YYavicAirWiFiLayer::rxDrainBody()
              * RX completion enqueue) hands a packet back to its source queue,
              * and IOSkywalkRxCompletionQueue has no packetCompletion (0.4.3:
              * panic "default packetCompletion()"); NULL skips that step. */
+            uint64_t tp = mach_absolute_time();
             IOReturn pr = yy_skw_pkt_prepareWithQueue(p, nullptr, 2, 0);
             if (pr != kIOReturnSuccess || yy_skw_pkt_bufcount(p) == 0) {
                 static uint32_t e;
                 if (e++ < 5)
                     yy_trace("DATA: rx prepare = 0x%x bufs=%u\n", pr, yy_skw_pkt_bufcount(p));
                 fRxDrop++;
+                fDropPrep++;
                 yy_skw_pool_deallocatePacket(fPool, p);
                 mbuf_freem(m);
                 continue;
@@ -2226,20 +2334,25 @@ void YYavicAirWiFiLayer::rxDrainBody()
             if (dst == nullptr || mbuf_copydata(m, 0, len, dst) != 0 ||
                 yy_skw_pkt_setOffLen(p, 0, (uint32_t)len) != kIOReturnSuccess) {
                 fRxDrop++;
+                fDropCopy++;
                 yy_skw_pool_deallocatePacket(fPool, p);
                 mbuf_freem(m);
                 continue;
             }
             mbuf_freem(m);
+            { uint32_t w = yy_ms_since(tp); if (w > fPhCopyMs) fPhCopyMs = w; }
             batch[nb++] = p;
             if (nb == YY_BATCH || list == nullptr) {
+                uint64_t te = mach_absolute_time();
                 IOReturn r = yy_skw_rxcomp_enqueue(fRxCompQ, batch, nb, 0);
+                { uint32_t w = yy_ms_since(te); if (w > fPhEnqMs) fPhEnqMs = w; }
                 if (r == kIOReturnSuccess) {
                     fRxEnq += nb;
                 } else {
                     static uint32_t e;
                     if (e++ < 5)
                         yy_trace("DATA: rx enqueue n=%u failed 0x%x\n", nb, r);
+                    fDropEnq += nb;
                     for (uint32_t i = 0; i < nb; i++)
                         yy_skw_pool_deallocatePacket(fPool, batch[i]);
                     fRxDrop += nb;
@@ -2349,8 +2462,18 @@ void YYavicAirWiFiLayer::dataAttach()
     if (fSymTx == nullptr)
         fSymTx = OSSymbol::withCString(YY_RADIO_FN_TX);
     if (fRxES == nullptr) {
+#ifdef YY_OS26
+        /* macOS 26: the RX drain used to run on the shared IO80211 work queue (WCL commands,
+         * timers, ioctls); stalls there of 100+ ms filled our 1024-packet backlog (about 1 %
+         * RX drops, TCP stuck near 40 Mbit/s). Own thread instead. */
+        if (fRxLoop == nullptr)
+            fRxLoop = IOWorkLoop::workLoop();
+        IOWorkLoop *wl = fRxLoop != nullptr ? fRxLoop : (IOWorkLoop *)gYYWorkQueue;
+#else
+        IOWorkLoop *wl = (IOWorkLoop *)gYYWorkQueue;
+#endif
         fRxES = IOInterruptEventSource::interruptEventSource(this, yy_rx_es_action);
-        if (fRxES != nullptr && ((IOWorkLoop *)gYYWorkQueue)->addEventSource(fRxES) != kIOReturnSuccess)
+        if (fRxES != nullptr && wl->addEventSource(fRxES) != kIOReturnSuccess)
             OSSafeReleaseNULL(fRxES);
     }
     if (fRxLock == nullptr || fSymTx == nullptr || fRxES == nullptr) {
@@ -2448,7 +2571,11 @@ void YYavicAirWiFiLayer::linkStateReport(bool up)
 {
     if (fNetIf == nullptr || gYYMode != 1)
         return;
+#ifdef YY_OS26
+    bool r = yy_infra_setLinkState(fNetIf, up ? 2 : 1, 0, false, 0, 0);
+#else
     bool r = yy_infra_setLinkState(fNetIf, up ? 2 : 1, 0, false, 0);
+#endif
     yy_trace("DATA: setLinkState(%s) = %d\n", up ? "up" : "down", r);
 }
 
@@ -2552,7 +2679,37 @@ void YYavicAirWiFiLayer::joinTimerFired()
             yy_trace("DATA: t=%us tx in=%llu ok=%llu drop=%llu | rx in=%llu enq=%llu drop=%llu | wq rx=%llums tx=%llums (copy %llu radio %llu comp %llu)\n",
                      fLinkTicks, fTxIn, fTxOk, fTxDrop, fRxIn, fRxEnq, fRxDrop, rxns / 1000000, txns / 1000000,
                      cns / 1000000, rns / 1000000, kns / 1000000);
+            yy_trace("DATA: rx drops: qfull=%llu detached=%llu alloc=%llu prep=%llu copy=%llu enq=%llu | backlog max=%u drain max=%ums gap max=%ums | call max: lock=%ums alloc=%ums prep+copy=%ums enqueue=%ums\n",
+                     fDropQFull, fDropDetached, fDropAlloc, fDropPrep, fDropCopy, fDropEnq, fRxQMax, fDrainMaxMs, fGapMaxMs,
+                     fPhLockMs, fPhAllocMs, fPhCopyMs, fPhEnqMs);
         }
+#ifdef YY_OS26
+        /*
+         * macOS 26: WCLNetManager::assocTimerAction leaves the network after 60 s
+         * without a beacon-liveness sign (handleMissedBeacons; both timestamps at
+         * +0x150/+0x158 of its state stale). They are refreshed by the LQM update
+         * (bulletin message 0x27, 0x1dc bytes, handleLqmUpdate): valid flags at
+         * +0x1d8/+0x1d9, beacon counters at +0x14/+0x1c (rx > previous) and
+         * +0x28/+0x30. The radio is in RUN and we see its beacons, so say so.
+         */
+        {
+            static uint32_t lqm_tick;
+            if ((++lqm_tick & 3) == 0) {
+                uint8_t lqm[0x1dc];
+                bzero(lqm, sizeof(lqm));
+                lqm[0x1d8] = 1;
+                lqm[0x1d9] = 1;
+                lqm[0x54] = 1;                  /* skip the driver query in the handler */
+                *(uint32_t *)(lqm + 0x1c) = 1;  /* beacons received > before (0x14) */
+                *(uint32_t *)(lqm + 0x28) = 1;
+                lqm[0x30] = 1;
+                yy_ctrl_postMessage(this, fNetIf, YY_MSG_LQM, lqm, sizeof(lqm), true);
+                static uint32_t n;
+                if (n++ < 3)
+                    yy_trace("LQM: posted liveness update #%u\n", n);
+            }
+        }
+#endif
         fJoinTimer->setTimeoutMS(1000);
     }
 }
@@ -2563,9 +2720,11 @@ void YYavicAirWiFiLayer::stop(IOService *provider)
     dataDetach();
     gYYDataCtrl = nullptr;
     if (fRxES != nullptr) {
-        ((IOWorkLoop *)gYYWorkQueue)->removeEventSource(fRxES);
+        IOWorkLoop *wl = fRxLoop != nullptr ? fRxLoop : (IOWorkLoop *)gYYWorkQueue;
+        wl->removeEventSource(fRxES);
         OSSafeReleaseNULL(fRxES);
     }
+    OSSafeReleaseNULL(fRxLoop);
     if (fBsdIf) {
         IONetworkController::detachInterface(fBsdIf, true);
         OSSafeReleaseNULL(fBsdIf);
@@ -2671,7 +2830,14 @@ IOReturn YYavicAirWiFiLayer::getCARD_CAPABILITIES(IO80211SkywalkInterface *, app
         }
     }
     d->version = APPLE80211_VERSION;
+#ifdef YY_OS26
+    /* macOS 26: AppleBCMWLANCore::getCARD_CAPABILITIES clears offsets 0..0x1b of the
+     * (0xaa pre-filled) buffer and sets bits up to caps[20]; the SDK struct only has
+     * 11 bytes. Clear everything Apple clears so no stale bit stays. */
+    memset((uint8_t *)d + 4, 0, 24);
+#else
     memset(d->capabilities, 0, sizeof(d->capabilities));
+#endif
     /* MT7922 (YYavicMtkWlan): RSN with TKIP/CCMP, short slot/preamble, WME.
      * Byte layout and the extra bytes as AirportItlwm reports them. */
     d->capabilities[0] |= 1 << APPLE80211_CAP_TKIP | 1 << APPLE80211_CAP_AES_CCM;

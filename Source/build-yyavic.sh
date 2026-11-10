@@ -13,7 +13,13 @@ Y=${0:A:h}
 # Xcode: DEVELOPER_DIR if set, else the selected one (xcode-select -p).
 XC=${DEVELOPER_DIR:-$(xcode-select -p)}
 # MacKernelSDK (acidanthera): the copy inside the radio project, or MACKERNELSDK.
-SDKH=${MACKERNELSDK:-$Y/YYavicMtkWlan/MacKernelSDK}/Headers
+# YY_MACOS=26: macOS 26 build (SDK copy sdk26/ with IONetworkController slots
+# 6/7 named as in 26, radio deployment target 11.0 so IOEthernetController's
+# used reserved slots get their real names). YY_NOLAYER=1: radio (+ Bluetooth)
+# only, without the native IO80211 layer.
+YYOS=${YY_MACOS:-15}
+if [ "$YYOS" = 26 ]; then SDKH=${MACKERNELSDK:-$Y/sdk26/MacKernelSDK}/Headers; RDT="MACOSX_DEPLOYMENT_TARGET=11.0"
+else SDKH=${MACKERNELSDK:-$Y/YYavicMtkWlan/MacKernelSDK}/Headers; RDT=""; fi
 OUT=$Y/build-$TAG
 NAME=YYavicWiFi
 BID=com.yyavic.WiFi
@@ -24,15 +30,21 @@ rm -rf $OUT; mkdir -p $OUT
 # 1. radio objects
 ( cd $Y/YYavicMtkWlan && $XC/usr/bin/xcodebuild -project YYavicMtkWlan.xcodeproj -scheme YYavicMtkWlan \
     -configuration Debug HEADER_SEARCH_PATHS=$SDKH KERNEL_EXTENSION_HEADER_SEARCH_PATHS=$SDKH \
-    GIT_COMMIT=-yyavic-$TAG SYMROOT=$OUT/radio OBJROOT=$OUT/radio/obj CODE_SIGNING_ALLOWED=NO \
+    GIT_COMMIT=-yyavic-$TAG ${RDT:+$RDT} SYMROOT=$OUT/radio OBJROOT=$OUT/radio/obj CODE_SIGNING_ALLOWED=NO \
     "OTHER_CFLAGS=\$(inherited) -fmacro-prefix-map=$Y/= -fdebug-prefix-map=$Y/=" build ) \
     > $OUT/radio.log 2>&1 || { grep -E "error:" $OUT/radio.log | head; exit 1; }
 LFL=$(find $OUT/radio/obj -name YYavicMtkWlan.LinkFileList | head -1)
 RINFO=$(find $OUT/radio -name YYavicMtkWlan.kext -type d | head -1)/Contents/Info.plist
 
 # 2. layer object
-( cd $Y/YYavicAirWiFiLayer && ./build.sh ) > $OUT/layer.log 2>&1 || { grep -E "error" $OUT/layer.log | head; exit 1; }
-LOBJ=$Y/YYavicAirWiFiLayer/build/obj/layer.o
+LPLIST=$Y/YYavicAirWiFiLayer/Info.plist
+if [ "${YY_NOLAYER:-0}" = 1 ]; then
+    LOBJ=""; LPLIST=$OUT/empty.plist
+    printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict/></plist>\n' > $LPLIST
+else
+    ( cd $Y/YYavicAirWiFiLayer && ./build.sh ) > $OUT/layer.log 2>&1 || { grep -E "error" $OUT/layer.log | head; exit 1; }
+    LOBJ=$Y/YYavicAirWiFiLayer/build/obj/layer.o
+fi
 
 # 3. one kmod_info
 CC=$(DEVELOPER_DIR=$XC xcrun -f clang); CXX=$(DEVELOPER_DIR=$XC xcrun -f clang++)
@@ -53,7 +65,7 @@ $CC -x c -target x86_64-apple-macos11.0 -mkernel -nostdinc -fno-builtin -fno-com
 
 # 4. link
 grep -v '_info\.o$' $LFL > $OUT/objs.txt
-echo $LOBJ >> $OUT/objs.txt
+[ -z "$LOBJ" ] || echo $LOBJ >> $OUT/objs.txt
 echo $OUT/info.o >> $OUT/objs.txt
 K=$OUT/$NAME.kext
 mkdir -p $K/Contents/MacOS
@@ -62,7 +74,7 @@ $CXX -target x86_64-apple-macos11.0 -nostdlib -Xlinker -kext -Xlinker -no_dedupl
     -lkmodc++ -lkmod -lcc_kext -o $K/Contents/MacOS/$NAME 2> $OUT/link.log || { cat $OUT/link.log; exit 1; }
 
 # 5. Info.plist: radio personality + layer personalities, union of libraries
-python3 - "$RINFO" "$Y/YYavicAirWiFiLayer/Info.plist" "$K/Contents/Info.plist" "$NAME" "$BID" "$VER" <<'PY'
+python3 - "$RINFO" "$LPLIST" "$K/Contents/Info.plist" "$NAME" "$BID" "$VER" <<'PY'
 import plistlib, sys
 r, l, out, name, bid, ver = sys.argv[1:]
 R = plistlib.load(open(r, 'rb')); L = plistlib.load(open(l, 'rb'))

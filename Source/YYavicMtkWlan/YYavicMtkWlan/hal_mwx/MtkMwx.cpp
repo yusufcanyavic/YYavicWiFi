@@ -139,6 +139,7 @@ static uint32_t gYYAmsduFlushSeq, gYYAmsduFlushEnd, gYYAmsduFlushFull, gYYAmsduA
 #define	MWX_RXI_AMSDU_MASK	(3U << MWX_RXI_AMSDU_SHIFT)
 static uint32_t gYYRxHe, gYYRxHeMcs[16];	/* YYavic dbg 33: HE RX frames */
 /* YYavic perf (dbg 32): cumulative mach_absolute_time per stage on the radio work loop */
+static uint64_t gYYDqRd, gYYDqSync, gYYDqUnl, gYYDqRest, gYYDqEnd, gYYDqPkts, gYYDqCalls, gYYDqMaxCall, gYYDqRdN;
 static uint64_t gYYPfIntr, gYYPfDeq, gYYPfFill, gYYPfProc, gYYPfIfIn, gYYPfStart, gYYPfTxDone;
 static uint32_t gYYPfIntrN, gYYPfRxPkts, gYYPfRxCalls, gYYPfStartN;
 extern "C" volatile int gCompatIntrIndex, gCompatIntrType;
@@ -3750,8 +3751,12 @@ mwx_dma_rx_dequeue(struct mwx_softc *sc, struct mwx_queue *q,
 	struct mbuf *m, *m0 = NULL, *mtail = NULL;
 	int idx, last;
 
+	uint64_t yq0 = mach_absolute_time(), yq1, yq2, yq3;
 	idx = q->mq_cons;
 	last = mwx_read(sc, q->mq_regbase + MT_DMA_DMA_IDX);
+	yq1 = mach_absolute_time();
+	gYYDqRd += yq1 - yq0;
+	gYYDqRdN++;
 
 	if (idx == last)
 		return;
@@ -3765,9 +3770,14 @@ mwx_dma_rx_dequeue(struct mwx_softc *sc, struct mwx_queue *q,
 		md = &q->mq_data[idx];
 		desc = &q->mq_desc[idx];
 
+		yq2 = mach_absolute_time();
 		bus_dmamap_sync(sc->sc_dmat, md->md_map, 0,
 		    md->md_map->dm_mapsize, BUS_DMASYNC_POSTREAD);
+		yq3 = mach_absolute_time();
+		gYYDqSync += yq3 - yq2;
 		bus_dmamap_unload(sc->sc_dmat, md->md_map);
+		gYYDqUnl += mach_absolute_time() - yq3;
+		gYYDqPkts++;
 
 		/* dequeue mbuf */
 		m = md->md_mbuf;
@@ -3799,8 +3809,12 @@ mwx_dma_rx_dequeue(struct mwx_softc *sc, struct mwx_queue *q,
 
 		/* check if more data made it in */
 		/* XXX should we actually do that? */
-		if (idx == last)
+		if (idx == last) {
+			uint64_t yr = mach_absolute_time();
 			last = mwx_read(sc, q->mq_regbase + MT_DMA_DMA_IDX);
+			gYYDqRd += mach_absolute_time() - yr;
+			gYYDqRdN++;
+		}
 	}
 
 	/* XXX make sure we don't have half processed data */
@@ -3810,6 +3824,13 @@ mwx_dma_rx_dequeue(struct mwx_softc *sc, struct mwx_queue *q,
 	    BUS_DMASYNC_POSTREAD);
 
 	q->mq_cons = idx;
+	{
+		uint64_t yd = mach_absolute_time() - yq1;
+		gYYDqEnd += yd;	/* whole loop incl. everything */
+		gYYDqCalls++;
+		if (yd > gYYDqMaxCall)
+			gYYDqMaxCall = yd;
+	}
 }
 
 void
@@ -8866,6 +8887,33 @@ mwx_dbg(uint32_t op, uint32_t a, uint32_t b, char *out, size_t outlen)
 		    bni ? bni->ni_vhtcaps : 0, bni ? bni->ni_he_cap_elem.phy_cap_info[0] : 0,
 		    bni ? bni->ni_chw : 0, bw, c,
 		    (bni && bni->ni_chan && bni->ni_chan != IEEE80211_CHAN_ANYC) ? bni->ni_chan->ic_center_freq1 : 0);
+		break;
+	}
+	case 41: {	/* YYavic: son 8 ieee80211_new_state istegi (kim, nerede, hangi duruma) */
+		uint64_t nsn;
+		absolutetime_to_nanoseconds(mach_absolute_time(), &nsn);
+		int k = snprintf(out, outlen, "now=%us ", (uint32_t)(nsn / 1000000000ull));
+		yy_ns_dump(out + k, outlen - k);
+		break;
+	}
+	case 40: {	/* YYavic: deauth/disassoc, 4-way, GTK, RUN->SCAN nedenleri */
+		struct ieee80211com *ic40 = &sc->sc_ic;
+		snprintf(out, outlen, "state=%d rx_deauth=%u rx_disassoc=%u deauth_reason=%d | rx_badkey=%u rx_nowep=%u ni_fails=%u flags=0x%x",
+		    (int)ic40->ic_state, (uint32_t)ic40->ic_stats.is_rx_deauth, (uint32_t)ic40->ic_stats.is_rx_disassoc,
+		    (int)ic40->ic_deauth_reason, 0u, 0u, ic40->ic_bss ? (uint32_t)ic40->ic_bss->ni_fails : 0u,
+		    (uint32_t)ic40->ic_flags);
+		break;
+	}
+	case 39: {	/* YYavic perf: rx dequeue parcalari (ms), a=1 sifirla */
+		uint64_t ns2;
+		absolutetime_to_nanoseconds(1000000, &ns2);
+#define YYMS2(x) ((uint32_t)(((x) * ns2 / 1000000) / 1000000))
+		snprintf(out, outlen, "dq calls=%u pkts=%u | read=%ums/%u sync=%ums unload=%ums loop-total=%ums | max call=%ums",
+		    (uint32_t)gYYDqCalls, (uint32_t)gYYDqPkts, YYMS2(gYYDqRd), (uint32_t)gYYDqRdN,
+		    YYMS2(gYYDqSync), YYMS2(gYYDqUnl), YYMS2(gYYDqEnd), YYMS2(gYYDqMaxCall));
+#undef YYMS2
+		if (a == 1)
+			gYYDqRd = gYYDqSync = gYYDqUnl = gYYDqRest = gYYDqEnd = gYYDqPkts = gYYDqCalls = gYYDqMaxCall = gYYDqRdN = 0;
 		break;
 	}
 	case 38: {	/* YYavic 0.7.3 own-address change: a=10 full cycle (default), a=11 re-add only; timing + fw timeouts */

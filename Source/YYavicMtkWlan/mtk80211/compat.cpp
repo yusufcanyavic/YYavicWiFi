@@ -350,14 +350,36 @@ void bus_dmamap_sync(bus_dma_tag_t tag, bus_dmamap_t dmam, bus_addr_t offset, bu
 	if (copy_len == 0)
 		return;
 
+	/* YYavic t26f: macOS 26 mbuf_copyback cost ~190 us per packet (bounce RX
+	 * limited Wi-Fi to ~45 Mbit/s). A single-mbuf packet is copied directly. */
+	mbuf_t bm = dmam->dm_mbuf;
 	if (ops & BUS_DMASYNC_PREWRITE) {
-		mbuf_copydata(dmam->dm_mbuf, offset, copy_len,
-		    (uint8_t *)bounce + offset);
+		if (mbuf_next(bm) == 0 && mbuf_len(bm) >= offset + copy_len)
+			memcpy((uint8_t *)bounce + offset,
+			    (uint8_t *)mbuf_data(bm) + offset, copy_len);
+		else
+			mbuf_copydata(bm, offset, copy_len,
+			    (uint8_t *)bounce + offset);
 	}
 	if (ops & BUS_DMASYNC_POSTREAD) {
-		mbuf_copyback(dmam->dm_mbuf, offset, copy_len,
-		    (uint8_t *)bounce + offset, MBUF_DONTWAIT);
-		mbuf_inbound_modified(dmam->dm_mbuf);
+		bool done = false;
+		if (mbuf_next(bm) == 0) {
+			size_t need = offset + copy_len;
+			size_t cur = mbuf_len(bm);
+			if (cur < need && mbuf_trailingspace(bm) >= need - cur) {
+				mbuf_setlen(bm, need);
+				cur = need;
+			}
+			if (cur >= need) {
+				memcpy((uint8_t *)mbuf_data(bm) + offset,
+				    (uint8_t *)bounce + offset, copy_len);
+				done = true;
+			}
+		}
+		if (!done)
+			mbuf_copyback(bm, offset, copy_len,
+			    (uint8_t *)bounce + offset, MBUF_DONTWAIT);
+		mbuf_inbound_modified(bm);
 	}
 }
 
@@ -437,8 +459,10 @@ int bus_dmamap_load(bus_dmamap_t map, mbuf_t mb) {
 				map->dm_bounce_mem = 0;
 				map->dm_bounce_size = 0;
 			}
+			/* YYavic t26g: data bounce buffers cacheable (x86 DMA is coherent);
+			 * inhibit-cache made the CPU copy ~200 us per packet. */
 			IOBufferMemoryDescriptor *mem =
-			    alloc_dma_memory(bounce_size, PAGE_SIZE);
+			    alloc_dma_memory(bounce_size, PAGE_SIZE, kIOMemoryPhysicallyContiguous);
 			if (mem == 0)
 				return 1;
 			map->dm_bounce_mem = mem;
@@ -535,4 +559,35 @@ void bus_dmamap_unload(bus_dma_tag_t tag, bus_dmamap_t map) {
 	map->dm_bounce = false;
 	map->dm_nsegs = 0;
 	map->dm_mapsize = 0;
+}
+
+
+/* YYavic t26j: ring of the last 8 ieee80211_new_state() requests (who moved the state) */
+#include <mach/mach_time.h>
+struct yy_ns_ent { char fn[28]; int line; int nstate; uint32_t secs; };
+static struct yy_ns_ent gYYNs[8];
+static uint32_t gYYNsN;
+void yy_ns_record(const char *fn, int line, int nstate)
+{
+	struct yy_ns_ent *e = &gYYNs[gYYNsN++ & 7];
+	uint64_t ns;
+	absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
+	strlcpy(e->fn, fn, sizeof(e->fn));
+	e->line = line;
+	e->nstate = nstate;
+	e->secs = (uint32_t)(ns / 1000000000ull);
+}
+int yy_ns_dump(char *out, size_t outlen)
+{
+	int n = 0;
+	for (uint32_t i = 0; i < 8; i++) {
+		uint32_t idx = (gYYNsN + i) & 7;
+		struct yy_ns_ent *e = &gYYNs[idx];
+		if (e->fn[0] == 0)
+			continue;
+		n += snprintf(out + n, outlen - n, "[%us %s:%d>%d] ", e->secs, e->fn, e->line, e->nstate);
+		if ((size_t)n >= outlen)
+			break;
+	}
+	return n;
 }

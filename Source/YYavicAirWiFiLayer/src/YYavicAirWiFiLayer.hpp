@@ -30,7 +30,12 @@
 #define __IO80211_TARGET __MAC_11_0
 #endif
 #include <IOKit/80211/apple80211_ioctl.h>
+/* YY_OS26: build for macOS 26 (Darwin 25); default is macOS 15.8.1 (Darwin 24.6) */
+#ifdef YY_OS26
+#include "IO80211_26.h"
+#else
 #include "IO80211_15_8_1.h"
+#endif
 #include <IOKit/pci/IOPCIDevice.h>
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOInterruptEventSource.h>
@@ -80,12 +85,26 @@ public:
     virtual IOReturn getCHANNELS_INFO(apple80211_channels_info *) override;
     virtual IOReturn getCOUNTRY_CHANNELS_INFO(apple80211_channels_info *) override;
     virtual IOReturn setWCL_ASSOCIATE(apple80211AssocCandidates *) override;
+#ifdef YY_OS26
+    virtual IOReturn setWCL_JOIN_ABORT(apple80211_wcl_abort_join *) override;
+    virtual IOReturn getHW_ADDR(apple80211_hw_mac_address *) override;   /* declared by hand: not a stub */
+#else
     virtual IOReturn setWCL_JOIN_ABORT(void *) override;
+#endif
     virtual IOReturn getCHANNEL(apple80211_channel_data *) override;
     virtual IOReturn getRSSI(apple80211_rssi_data *) override;
     virtual IOReturn getRATE(apple80211_rate_data *) override;
     virtual IOReturn getROAM_PROFILE(apple80211_roam_profile_all_bands *) override;
+#ifdef YY_OS26
+    /* macOS 26: mloAddrArray (Wi-Fi 7 MLO addresses); its first 6 bytes are the primary address
+     * (AppleBCMWLANSkywalkInterface::setMacAddress passes it straight to setCurEtheraddr) */
+    virtual IOReturn setMacAddress(mloAddrArray &) override;
+#else
     virtual IOReturn setMacAddress(ether_addr &) override;
+#endif
+#ifdef YY_OS26
+    IOReturn setMacAddressSingle(ether_addr &);
+#endif
     virtual IOReturn getWCL_LOW_LATENCY_INFO(apple80211_low_latency_info *) override;
     virtual IOReturn setWCL_LEAVE_NETWORK(apple80211_leave_network *) override;
     virtual IOReturn getWCL_BSS_INFO(apple80211_beacon_msg *) override;
@@ -95,7 +114,11 @@ public:
     virtual IOReturn getMCS_VHT(apple80211_mcs_vht_data *) override;
     virtual IOReturn getNSS(apple80211_nss_data *) override;
     virtual IOReturn getMAX_NSS_FOR_AP(apple80211_btcoex_max_nss_for_ap_data *) override;
+#ifdef YY_OS26
+#include "YYavicAirWiFiLayerInterface_stubs26.inc"
+#else
 #include "YYavicAirWiFiLayerInterface_stubs.inc"
+#endif
 };
 
 /*
@@ -165,6 +188,12 @@ public:
     mbuf_t fRxHead, fRxTail;
     uint32_t fRxQLen;
     IOInterruptEventSource *fRxES;
+    IOWorkLoop *fRxLoop;                 /* 0.8.0 (macOS 26): own RX drain thread, not the shared IO80211 queue */
+    /* drop reasons / backlog (0.8.0 diagnostics) */
+    uint64_t fDropQFull, fDropDetached, fDropAlloc, fDropPrep, fDropCopy, fDropEnq;
+    uint32_t fRxQMax, fDrainMaxMs, fGapMaxMs;
+    uint64_t fLastDrainEnd;
+    uint32_t fPhAllocMs, fPhCopyMs, fPhEnqMs, fPhLockMs;   /* max single-call times (0.8.0 diagnostics) */
     const OSSymbol *fSymTx;
     bool fDataAttached;
     uint64_t fRxIn, fRxEnq, fRxDrop, fTxIn, fTxOk, fTxDrop;

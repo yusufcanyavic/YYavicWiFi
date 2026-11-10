@@ -2,13 +2,16 @@
 # Copyright (C) 2026 Yusufcan Yavic, SPDX-License-Identifier: GPL-3.0-or-later
 # YYavicAirWiFiLayer: cekirdek bayraklariyla derle ve kext paketini olustur.
 set -e
-D=${0:A:h}; SDK=${MACKERNELSDK:-$D/../YYavicMtkWlan/MacKernelSDK}
+D=${0:A:h}
+# YY_MACOS=26: macOS 26 layer (sdk26 with IONetworkController slots named as in 26, -DYY_OS26)
+if [ "${YY_MACOS:-15}" = 26 ]; then SDK=${MACKERNELSDK:-$D/../sdk26/MacKernelSDK}; OSDEF=-DYY_OS26
+else SDK=${MACKERNELSDK:-$D/../YYavicMtkWlan/MacKernelSDK}; OSDEF=; fi
 XC=${DEVELOPER_DIR:-$(xcode-select -p)}
 CXX=$(DEVELOPER_DIR=$XC xcrun -f clang++); CC=$(DEVELOPER_DIR=$XC xcrun -f clang)
 KSDK=$(DEVELOPER_DIR=$XC xcrun --sdk macosx --show-sdk-path)
 OUT=$D/build; rm -rf $OUT; mkdir -p $OUT/obj $OUT/YYavicAirWiFiLayer.kext/Contents/MacOS
 FLAGS=(-target x86_64-apple-macos11.0 -mkernel -fapple-kext -nostdinc -fno-builtin -fno-common -O2 -g
-       -DYY_VERSION_STR='"'${YY_VERSION:-dev}'"' -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DPRIVATE -D__PRIVATE_SPI__ -DAPPLE -DNeXT
+       -DYY_VERSION_STR='"'${YY_VERSION:-dev}'"' ${OSDEF:+$OSDEF} -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DPRIVATE -D__PRIVATE_SPI__ -DAPPLE -DNeXT
        -I$D/src -I$SDK/Headers -I$SDK/Headers/IOKit -isystem $KSDK/System/Library/Frameworks/Kernel.framework/Headers
        -fmacro-prefix-map=$D/../= -fdebug-prefix-map=$D/../=
        -Wno-everything -Werror=implicit-function-declaration)

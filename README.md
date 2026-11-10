@@ -15,8 +15,9 @@ It consists of two parts linked into one kext:
   state machine, Wi-Fi 6). Built on zxystd's macOS Wi-Fi framework and
   OpenBSD's `mwx` and `net80211`.
 - **Native layer** (`YYavicAirWiFiLayer`): an `IO80211Controller` /
-  `IO80211InfraInterface` / Skywalk data path written for macOS Sequoia, so the
-  card is driven by macOS's WCL (Wi-Fi Control Layer) like Apple's own drivers.
+  `IO80211InfraInterface` / Skywalk data path written for macOS Sequoia (15)
+  and macOS Tahoe (26), so the card is driven by macOS's WCL (Wi-Fi Control
+  Layer) like Apple's own drivers.
 
 The radio started from laobamac's **SimpleMtkWlan**, an early MT7921/MT7922
 port of OpenBSD's `mwx` that loaded firmware, scanned and authenticated but
@@ -45,6 +46,15 @@ macOS Wi-Fi layer were developed in YYavicWiFi by Yusufcan Yaviç.
 
 The same machine on Windows reaches about 900 Mbit/s on this line. Upload is
 limited by the 50 Mbit/s ISP line: faster uploads have not been measured.
+
+**macOS 26.7.2 (25G332)**, same machine and line (5 GHz channel 56-60, 160 MHz):
+
+| Driver version | Mode | Speedtest (Chrome) down / up |
+|---|---|---|
+| **0.8.0** | **802.11ax, 2x2, 160 MHz** | **921 / 47 Mbit/s** |
+
+Measured with `curl`: one stream 450-520 Mbit/s, four streams about 740 Mbit/s;
+the link stays up (no loss while idle, 0.5 % under load).
 
 ## Features
 
@@ -83,11 +93,13 @@ spoofing, boot-arg or plist edit is needed for the IDs above.
 
 ## Requirements
 
-- **macOS 15.8.1 (build 24H32) only.** The native layer is built against the
-  exact IO80211Family/IOSkywalkFamily class layouts of this build. On any other
-  macOS build the layer **disables itself** at boot (log: `YYavicWiFi: native
-  Wi-Fi layer disabled, unsupported macOS`) instead of panicking; the boot-arg
-  `-yyavicnoverify` skips this check (only for testers, a wrong layout panics).
+- **macOS 15.8.1 (build 24H32) or macOS 26.7.2 (build 25G332), nothing else.**
+  The native layer is built against the exact IO80211Family/IOSkywalkFamily
+  class layouts of these builds, with one kext per macOS (`Kext/macOS15`,
+  `Kext/macOS26`). On any other macOS build the layer **disables itself** at
+  boot (log: `YYavicWiFi: native Wi-Fi layer disabled, unsupported macOS`)
+  instead of panicking; the boot-arg `-yyavicnoverify` skips this check (only
+  for testers, a wrong layout panics).
 - A card from "Supported hardware" above.
 - Your country set with the boot-arg `yyavic-cc=XX` (see "Country and channels").
 - OpenCore. Tested settings: `SecureBootModel = Disabled`, SIP partly disabled
@@ -98,7 +110,9 @@ spoofing, boot-arg or plist edit is needed for the IDs above.
 ## Installation (OpenCore)
 
 1. Back up your EFI.
-2. Copy `Kext/YYavicWiFi.kext` to `EFI/OC/Kexts/`.
+2. Copy the kext for your macOS to `EFI/OC/Kexts/` - `Kext/macOS15/YYavicWiFi.kext`
+   (macOS 15.8.1) or `Kext/macOS26/YYavicWiFi.kext` (macOS 26.7.2). Do not
+   install both.
 3. Add it to `config.plist` → `Kernel` → `Add`:
 
    ```xml
@@ -165,7 +179,7 @@ Check the active country: `./mtkscan dbg 37 0` (see Diagnostics).
 | `-yyavicoff` | Do not start the native layer (radio only, no macOS Wi-Fi) |
 | `-yyavicnohe` | Disable 802.11ax (connect as 802.11ac) |
 | `-yyavicnodrvavail` | Do not post the boot-time "driver available" event |
-| `-yyavicnoverify` | Skip the macOS 15.8.1 check (testers only, may panic) |
+| `-yyavicnoverify` | Skip the macOS build check (testers only, may panic) |
 
 ## Known limitations
 
@@ -187,6 +201,10 @@ Check the active country: `./mtkscan dbg 37 0` (see Diagnostics).
 - Built-in channel rules cover the regions in "Country and channels" only.
 - `14c3:0616` (RZ616), MT7921 and MT7921K are matched but untested.
 - No sleep/wake support, no 6 GHz, no AirDrop/AWDL, no Personal Hotspot (AP).
+- **macOS 26 only:** macOS asks the driver to roam (`APPLE80211_IOC_ROAM`,
+  `ROAM_PROFILE`); both are answered "not supported", which is harmless. The
+  macOS 26 kext has been tested on one machine only, and only since the
+  update from 15.8.1 to 26.7.2.
 
 ## Bluetooth
 
@@ -204,9 +222,13 @@ the last point itself:
   (14 zero bytes) and `bluetoothExternalDongleFailed` (`00`) at boot, only
   when they are missing or different. Boot-arg `-yyavicnobt` turns this off.
 
+**macOS 26** has the same MediaTek path in `bluetoothd`, but BlueToolFixup's
+patch of `bluetoothd` cuts the MT7922 off from it (see "macOS 26: one
+BlueToolFixup byte" below). The setup script below fixes that.
+
 **Tested on the test machine:** Bluetooth on, System Information shows
-`Chipset: SRS_7922`, `Transport: USB`; phone pairing works and survives
-reboots. **Not tested:** Bluetooth audio (headphones), Handoff / Continuity,
+`Chipset: SRS_7922`, `Transport: USB` (macOS 15.8.1 and macOS 26.7.2); phone
+pairing works and survives reboots (macOS 15.8.1). **Not tested:** Bluetooth audio (headphones), Handoff / Continuity,
 other Bluetooth IDs than `13D3:3585`. AirDrop is not supported (it needs Wi-Fi
 AWDL).
 
@@ -216,23 +238,71 @@ AWDL).
    - `YYavicWiFi.kext` (you already have it for Wi-Fi)
    - [Lilu](https://github.com/acidanthera/Lilu) (tested 1.7.3)
    - `BlueToolFixup.kext` from [BrcmPatchRAM](https://github.com/acidanthera/BrcmPatchRAM)
-     (tested 2.7.2) - **required**: without it macOS shows a placeholder
-     Broadcom controller and Bluetooth stays off (tested).
+     (tested 2.7.2, **unmodified**) - **required**: without it macOS shows a
+     placeholder Broadcom controller and Bluetooth stays off (tested).
 
-2. **Firmware, once** - in Terminal, from the release folder:
+2. **Setup script, once** - mount your EFI partition (macOS 26), then in
+   Terminal, from the release folder:
 
    ```sh
    sudo sh Bluetooth/setup-bluetooth.sh
    ```
 
    It copies `BT_RAM_CODE_MT7922_1_1_hdr.bin` to `/etc/bluetool/` (and does
-   nothing if it is already there).
+   nothing if it is already there). **On macOS 26** it also makes the
+   one-byte change in `BlueToolFixup.kext` (below): it finds the kext on the
+   mounted EFI partition, or you pass the path -
+   `sudo sh Bluetooth/setup-bluetooth.sh /Volumes/EFI/EFI/OC/Kexts/BlueToolFixup.kext`.
+   A backup of the kext goes to your home folder first. On macOS 15 the second
+   part is skipped.
 
 3. **USB map** - the Bluetooth device's USB port must be included in your
    USB port map (as an internal port).
 
 4. Reboot and check System Information → Bluetooth: `Chipset: SRS_7922`,
    `Transport: USB`, `State: On`.
+
+### macOS 26: one BlueToolFixup byte
+
+`bluetoothd` picks the MediaTek path (`HCI Transport is set to USB SRS`:
+power-on and firmware download for the MT7922) only for devices in its own
+supported list. BlueToolFixup patches `bluetoothd` with `cmp edx,0xA5C; je` →
+`cmp edx,0xA5C; jmp`, which sends every non-Broadcom USB Bluetooth device down
+the generic USB path instead; on macOS 26 that makes the list unreachable. The
+MT7922 then never gets its power-on / firmware commands, does not answer HCI
+and `bluetoothd` gives up after 20 s (`Third Party USB Bluetooth dongle failed
+initialization`, then it falls back to a UART controller that does not exist).
+
+`setup-bluetooth.sh` (or `Bluetooth/patch-bluetoolfixup.sh <kext> [--check|--revert]`)
+turns the replacement byte of that single patch back, nothing else in
+BlueToolFixup changes. It touches the file only when it finds the exact
+expected bytes once (BlueToolFixup 2.7.2); with another version it leaves the
+file alone and says so.
+
+If you would rather not edit the kext, add this to `config.plist` →
+`Kernel` → `Patch` instead (OpenCore applies it to the unmodified kext at every
+boot; do not use both):
+
+```xml
+<dict>
+    <key>Arch</key><string>x86_64</string>
+    <key>Base</key><string></string>
+    <key>Comment</key><string>YYavicWiFi: keep the MT7922 on the MediaTek path (macOS 26)</string>
+    <key>Count</key><integer>1</integer>
+    <key>Enabled</key><true/>
+    <key>Find</key><data>gfpcCgAAdIH6XAoAAOs=</data>
+    <key>Identifier</key><string>as.acidanthera.BlueToolFixup</string>
+    <key>Limit</key><integer>0</integer>
+    <key>Mask</key><data></data>
+    <key>MaxKernel</key><string></string>
+    <key>MinKernel</key><string>25.0.0</string>
+    <key>Replace</key><data>gfpcCgAAdIH6XAoAAHQ=</data>
+    <key>ReplaceMask</key><data></data>
+    <key>Skip</key><integer>0</integer>
+</dict>
+```
+
+(Find `81fa5c0a00007481fa5c0a0000eb`, Replace `81fa5c0a00007481fa5c0a000074`.)
 
 **Updating from 0.7.0 / 0.7.1:** `MtkBtIdMask.kext` and the two
 `bluetooth…` entries in `NVRAM → Add` are no longer needed; you can remove
@@ -254,6 +324,13 @@ values (`1161` / `57560` = `0489:E0D8`) as they are, and add it to
 - **Bluetooth off / not available, log repeats `HCI initialization failed`:**
   your Bluetooth USB ID is not masked (see above), or the firmware file is
   missing (step 2).
+- **macOS 26, `bluetoothd` logs `HCI Transport is set to USB` (without `SRS`),
+  then `Third Party USB Bluetooth dongle failed initialization`:** the
+  BlueToolFixup byte is not changed yet (run `setup-bluetooth.sh`, restart).
+  `/usr/bin/log show --last 5m --predicate 'process == "bluetoothd"' | grep -i
+  "Transport is set"` shows it. `bluetoothd` also writes
+  `bluetoothExternalDongleFailed=01` after a failure; the kext (and
+  OpenCore) reset it to `00` at the next boot.
 - Check the state any time with `system_profiler SPBluetoothDataType`.
 
 ## Building from source
@@ -263,9 +340,15 @@ The MacKernelSDK (acidanthera) copy is included in `Source/YYavicMtkWlan/MacKern
 
 ```sh
 cd Source
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer YY_VERSION=0.7.3 ./build-yyavic.sh release
+# macOS 26 kext (uses Source/sdk26, a MacKernelSDK copy with the macOS 26 kernel headers)
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer YY_MACOS=26 YY_VERSION=0.8.0 ./build-yyavic.sh release
 # result: Source/build-release/YYavicWiFi.kext
 ```
+
+`YY_MACOS=15` (the default) builds the macOS 15.8.1 kext. The macOS 15 kext
+in this release is the unchanged, tested **0.7.3** binary (tag `v0.7.3`); the
+0.8.0 radio changes for macOS 26 are shared code and have **not** been tested
+on macOS 15, so a macOS 15 kext built from this source is not that binary.
 
 `build-yyavic.sh` builds the radio with its Xcode project, the native layer
 with `YYavicAirWiFiLayer/build.sh`, and links both into one kext with one
@@ -284,6 +367,9 @@ clang -I Source/YYavicMtkWlan/include -framework IOKit -framework CoreFoundation
 ./mtkscan dbg 34 0        # A-MSDU / TX kick counters
 ./mtkscan dbg 37 0        # country, region and number of active channels
 ./mtkscan dbg 38 0        # last own-address change: time, firmware timeouts
+./mtkscan dbg 39 0        # RX dequeue timing (read / sync / unload), 39 1 resets
+./mtkscan dbg 40 0        # deauth / disassociation counters and last reason
+./mtkscan dbg 41 0        # last 8 net80211 state changes: caller, line, new state
 ```
 
 When reporting a problem, include the macOS build, the `mtkscan status`
@@ -304,7 +390,10 @@ output and any `/Library/Logs/DiagnosticReports/Kernel-*.panic` file.
   the Bluetooth firmware `Bluetooth/BT_RAM_CODE_MT7922_1_1_hdr.bin` (from
   linux-firmware) - is not covered by the GPL; it is redistributed under
   MediaTek's terms, see `LICENCE.mediatek`.
-- `Bluetooth/MtkBtIdMask.kext` (plist only) and `Bluetooth/setup-bluetooth.sh`: GPL-3.0-or-later.
+- `Bluetooth/MtkBtIdMask.kext` (plist only), `Bluetooth/setup-bluetooth.sh` and
+  `Bluetooth/patch-bluetoolfixup.sh`: GPL-3.0-or-later. The scripts do not
+  contain or distribute BlueToolFixup (Acidanthera, BSD-3-Clause); they change
+  one byte of the copy on your own EFI partition.
 - MacKernelSDK is under the Apple Public Source License, see its `LICENSE.txt`.
 
 See `CREDITS.md` for the people whose work this builds on.
