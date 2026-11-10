@@ -28,6 +28,36 @@ macOS Wi-Fi layer were developed in YYavicWiFi by Yusufcan Yaviç.
 > **Status: experimental.** Tested on one machine and one access point (see
 > below). Back up your EFI before installing and keep a working fallback.
 
+## Quick start (short version)
+
+For people who have not done this before. Everything here is explained in
+more detail further down. You need a Hackintosh that already boots with
+OpenCore, and a MediaTek MT7922 Wi-Fi card.
+
+1. **Check your macOS.** In Terminal run `sw_vers`. The version must be
+   **15.8.1** (build 24H32) or **26.7.2** (build 25G332). Other versions do not work.
+2. **Check your card.** Run `ioreg -l | grep -o 'pci14c3,[0-9a-f]*' | sort -u`.
+   `pci14c3,7922` is the tested card. `pci14c3,616` (RZ616), `7961` and `608`
+   (MT7921) are matched but untested.
+3. **Download** the latest zip from the [Releases](../../releases) page and unzip it.
+4. **Copy the kext for your macOS** to `EFI/OC/Kexts/`: `Kext/macOS15/YYavicWiFi.kext`
+   or `Kext/macOS26/YYavicWiFi.kext`. Remove any other Wi-Fi kext for this card
+   (for example SimpleMtkWlan) from that folder and from `config.plist`.
+5. **Add the kext to `config.plist`** → `Kernel` → `Add` (the exact block is in
+   "Installation" below).
+6. **Set your country**: in `config.plist` → `NVRAM` → `Add` →
+   `7C436110-AB2A-4BBB-A880-FE41995C9F82` → `boot-args`, add a space and
+   `yyavic-cc=XX` (your two-letter country code, for example `yyavic-cc=DE`).
+   Without it you only see 2.4 GHz channels 1-11 and 5 GHz channels 36-64, so a
+   network on other channels may not show up.
+7. **Restart.** The Wi-Fi appears in System Settings after about 20-40 seconds.
+   Check that the kext is loaded: `kextstat | grep -i yyavic`.
+
+Bluetooth is optional and needs a few more steps: see "Bluetooth" below.
+If something does not work, see "Known limitations" and open an
+[issue](../../issues) with your `sw_vers` and `kextstat | grep -i -E "yyavic|mtk|wlan|itl"`
+output.
+
 ## Measured result
 
 - **Machine:** Tongfang-chassis R9T Slayer laptop, AMD Ryzen 9 8945HX,
