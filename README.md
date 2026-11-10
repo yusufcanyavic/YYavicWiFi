@@ -114,8 +114,9 @@ spoofing, boot-arg or plist edit is needed for the IDs above.
    </dict>
    ```
 
-4. Reboot. About 20-30 seconds after the desktop appears the native layer
-   starts and Wi-Fi shows up in the menu bar. Join your network as usual.
+4. Reboot. The native layer starts about 20-40 seconds after the kernel, and
+   macOS joins known networks on its own (on the test machine the network is
+   connected before the login window). Join new networks as usual.
 
 The native interface is `en3`-style (a new Wi-Fi port). The radio also
 publishes an inactive Ethernet-type interface; that is expected.
@@ -179,6 +180,10 @@ Check the active country: `./mtkscan dbg 37 0` (see Diagnostics).
   when the link is 802.11ax / 160 MHz (cosmetic; the transmit rate, e.g. 2402,
   is correct). The cause is understood (macOS defers loading the card
   capabilities); the fix is not safe yet.
+- **"Private Wi-Fi address" must stay on (Fixed or Rotating).** With "Off"
+  macOS cannot join: it reads the card's own address only at the same deferred
+  firmware-load step as above, so it passes an all-zero address. If a network
+  does not join, check this setting first (System Settings > Wi-Fi > Details).
 - Built-in channel rules cover the regions in "Country and channels" only.
 - `14c3:0616` (RZ616), MT7921 and MT7921K are matched but untested.
 - No sleep/wake support, no 6 GHz, no AirDrop/AWDL, no Personal Hotspot (AP).
@@ -258,7 +263,7 @@ The MacKernelSDK (acidanthera) copy is included in `Source/YYavicMtkWlan/MacKern
 
 ```sh
 cd Source
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer YY_VERSION=0.7.2 ./build-yyavic.sh release
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer YY_VERSION=0.7.3 ./build-yyavic.sh release
 # result: Source/build-release/YYavicWiFi.kext
 ```
 
@@ -278,6 +283,7 @@ clang -I Source/YYavicMtkWlan/include -framework IOKit -framework CoreFoundation
 ./mtkscan dbg 35 0        # AP channel width (VHT operation) and our 160 MHz state
 ./mtkscan dbg 34 0        # A-MSDU / TX kick counters
 ./mtkscan dbg 37 0        # country, region and number of active channels
+./mtkscan dbg 38 0        # last own-address change: time, firmware timeouts
 ```
 
 When reporting a problem, include the macOS build, the `mtkscan status`

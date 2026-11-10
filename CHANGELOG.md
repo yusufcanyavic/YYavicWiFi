@@ -6,6 +6,26 @@ MT7922) with a Wi-Fi 6 router on 5 GHz channel 56, over an ISP line of
 1 Gbit/s download / 50 Mbit/s upload (uploads are capped by the line).
 "nQ" = macOS `networkQuality -I en3` download.
 
+## 0.7.3 - 2026-10-26 - faster Wi-Fi at boot
+
+- The first join after boot no longer fails. macOS sets the network's private
+  address at that join; the radio took 21 s for it and macOS gave up and
+  tried again. Two causes, both fixed:
+  - Firmware command waits made from the native layer (on the radio's
+    command gate) slept without letting the radio's interrupt run, so every
+    command waited for its 3 s timeout (7 of them). They now poll, as on the
+    radio's own thread. The address change takes 31-55 ms.
+  - The address change restarted the whole radio and emptied the scan
+    results, so the join waited in SCAN past macOS's 10 s limit. It now only
+    removes and re-adds the firmware device, as Linux does, and keeps the
+    scan results.
+- Measured on the test machine: IP address about 100 s after the kernel
+  starts (was about 148 s with a failed first join), before the login window;
+  reconnect after Wi-Fi off/on about 0.6 s.
+- `getHW_ADDR` returns the card's factory address (it was unimplemented).
+- `mtkscan dbg 38`: time and firmware timeouts of the last address change.
+- README: "Private Wi-Fi address: Off" is not supported yet.
+
 ## 0.7.2 - 2026-10-26 - Bluetooth set up by the kext
 
 - The kext now does the Bluetooth USB ID mask itself: the 27 MT7922 /

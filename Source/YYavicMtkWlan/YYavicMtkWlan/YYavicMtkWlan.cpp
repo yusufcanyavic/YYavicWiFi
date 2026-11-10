@@ -37,6 +37,7 @@
 #include <IOKit/network/IONetworkMedium.h>
 /* YYavic radio bridge data hook (mtk80211/openbsd/sys/_mbuf.cpp) */
 extern "C" { extern void (*yy_rx_hook_fn)(void *, void *); extern void *yy_rx_hook_ctx; }
+extern "C" int mwx_yy_hw_addr(uint8_t *out);
 extern "C" void mwx_yy_link_info(struct ieee80211com *ic, uint8_t *bss_bw, uint8_t *center, uint8_t *rx);
 #include <net/ethernet.h>
 #include <crypto/sha1.h>
@@ -50,6 +51,21 @@ static IOSimpleLock *gSmtwLock = NULL;
 static IOService *gSmtwProv = NULL;
 static char gSmtwHead[7168]; static size_t gSmtwHeadLen = 0;
 static char gSmtwTail[24576]; static size_t gSmtwTailLen = 0;
+
+/* 0.7.3: the radio log of the 15 s after an own-address change, kept apart
+ * (the tail ring rotates in seconds) and published as "yyavic-maclog". */
+static char gYYMacLog[6144];
+static size_t gYYMacLogLen;
+static uint64_t gYYMacLogT0;
+static volatile uint32_t gYYMacLogOn, gYYMacLogGen, gYYMacLogPub;
+extern "C" void yy_maclog_start(void)
+{
+    gYYMacLogLen = 0;
+    gYYMacLog[0] = 0;
+    gYYMacLogT0 = mach_absolute_time();
+    gYYMacLogOn = 1;
+    gYYMacLogGen++;
+}
 
 extern "C" void smtw_trace(const char *fmt, ...)
 {
@@ -77,6 +93,21 @@ extern "C" void smtw_trace(const char *fmt, ...)
     memcpy(gSmtwTail + gSmtwTailLen, line, n);
     gSmtwTailLen += n;
     gSmtwTail[gSmtwTailLen] = 0;
+    if (gYYMacLogOn) {
+        uint64_t ns = 0;
+        absolutetime_to_nanoseconds(mach_absolute_time() - gYYMacLogT0, &ns);
+        uint32_t ms = (uint32_t)(ns / 1000000);
+        if (ms > 15000) {
+            gYYMacLogOn = 0;
+        } else {
+            int m = snprintf(gYYMacLog + gYYMacLogLen, sizeof(gYYMacLog) - gYYMacLogLen, "%5u %s", ms, line);
+            if (m > 0 && gYYMacLogLen + m < sizeof(gYYMacLog) - 1)
+                gYYMacLogLen += m;
+            else
+                gYYMacLogOn = 0;
+            gYYMacLogGen++;
+        }
+    }
     IOSimpleLockUnlock(gSmtwLock);
 }
 
@@ -92,6 +123,10 @@ extern "C" void smtw_publish(void)
     IOSimpleLockUnlock(gSmtwLock);
     gSmtwProv->setProperty("smtw-trace", a);
     gSmtwProv->setProperty("smtw-last", b);
+    if (gYYMacLogPub != gYYMacLogGen) {
+        gYYMacLogPub = gYYMacLogGen;
+        gSmtwProv->setProperty("yyavic-maclog", gYYMacLog);
+    }
     IOFree(a, sizeof(gSmtwHead));
     IOFree(b, sizeof(gSmtwTail));
 }
@@ -1058,10 +1093,30 @@ void YYavicMtkWlan::associatePMK(const uint8_t *ssid, uint8_t ssid_len, const ui
 #include "yy_radio.h"
 
 enum { YY_RF_NONE, YY_RF_ABI, YY_RF_SCAN_START, YY_RF_SCAN_COPY, YY_RF_CHANNELS, YY_RF_JOIN, YY_RF_STATUS, YY_RF_LEAVE,
-       YY_RF_MAC, YY_RF_DATA_HOOK, YY_RF_TX, YY_RF_SET_MAC, YY_RF_POWER };
+       YY_RF_MAC, YY_RF_DATA_HOOK, YY_RF_TX, YY_RF_SET_MAC, YY_RF_POWER, YY_RF_HW_MAC };
 struct yy_radio_gate_args { int fn; void *p1, *p2; };
 
+static IOReturn yy_radio_gate_body(OSObject *owner, void *a0);
+
+/*
+ * 0.7.3: the bridge runs on the command gate from another thread (the layer's
+ * IO80211 work queue). Firmware command waits used to msleep there; with the
+ * gate held the interrupt source could not run, so every command waited for
+ * its 3 s timeout and was then recovered by polling (7 of them = the 21 s
+ * own-address change at the first join after boot). Mark the gate holder so
+ * mwxOnWorkLoop() lets those waits poll, as on the work loop thread.
+ */
+extern "C" void * volatile gYYGateThread;
 static IOReturn yy_radio_gate(OSObject *owner, void *a0, void *, void *, void *)
+{
+    void *prev = gYYGateThread;
+    gYYGateThread = (void *)current_thread();
+    IOReturn r = yy_radio_gate_body(owner, a0);
+    gYYGateThread = prev;
+    return r;
+}
+
+static IOReturn yy_radio_gate_body(OSObject *owner, void *a0)
 {
     YYavicMtkWlan *that = OSDynamicCast(YYavicMtkWlan, owner);
     struct yy_radio_gate_args *a = (struct yy_radio_gate_args *)a0;
@@ -1195,6 +1250,10 @@ static IOReturn yy_radio_gate(OSObject *owner, void *a0, void *, void *, void *)
         memcpy(a->p1, ic->ic_myaddr, 6);
         return kIOReturnSuccess;
     }
+    case YY_RF_HW_MAC:
+        if (a->p1 == NULL)
+            return kIOReturnBadArgument;
+        return mwx_yy_hw_addr((uint8_t *)a->p1) ? kIOReturnSuccess : kIOReturnNotReady;
     case YY_RF_SET_MAC: {
         MtkMwx *hal = OSDynamicCast(MtkMwx, that->fHalService);
         if (a->p1 == NULL)
@@ -1282,6 +1341,8 @@ IOReturn YYavicMtkWlan::callPlatformFunction(const OSSymbol *functionName, bool 
             fn = YY_RF_SET_MAC;
         else if (functionName->isEqualTo(YY_RADIO_FN_POWER))
             fn = YY_RF_POWER;
+        else if (functionName->isEqualTo(YY_RADIO_FN_HW_MAC))
+            fn = YY_RF_HW_MAC;
     }
     if (fn == YY_RF_NONE)
         return super::callPlatformFunction(functionName, waitForFunction, param1, param2, param3, param4);

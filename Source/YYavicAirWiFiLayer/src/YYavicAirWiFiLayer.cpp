@@ -561,6 +561,35 @@ IOReturn YYavicAirWiFiLayerInterface::setMacAddress(ether_addr &a)
 }
 
 /*
+ * 0.7.3: the card's factory address. WCL asks for it when the network's
+ * "Private Wi-Fi address" is off; the stub left it 00:00:00:00:00:00 and the
+ * join failed ("Invalid MAC Address", 0xe00002c2). Layout as
+ * AppleBCMWLANCore::getHW_ADDR (15.8.1): +0 u32 version = 1, +4 6-byte MAC.
+ * Falls back to the interface address if the radio has none.
+ */
+IOReturn YYavicAirWiFiLayerInterface::getHW_ADDR(apple80211_hw_mac_address *p)
+{
+    if (p == nullptr)
+        return kIOReturnBadArgument;
+    uint8_t *b = (uint8_t *)p;
+    uint8_t mac[6];
+    YYavicAirWiFiLayer *ctl = yy_ctrl_of(this);
+    IOService *r = ctl != nullptr ? ctl->radio() : nullptr;
+    bool ok = r != nullptr &&
+        r->callPlatformFunction(YY_RADIO_FN_HW_MAC, false, mac, nullptr, nullptr, nullptr) == kIOReturnSuccess;
+    if (!ok && ctl != nullptr)
+        ok = ctl->getHardwareAddress((IOEthernetAddress *)mac) == kIOReturnSuccess;
+    if (!ok)
+        return kIOReturnNotReady;
+    *(uint32_t *)b = 1;
+    memcpy(b + 4, mac, 6);
+    static uint32_t n;
+    if (n++ < 3)
+        yy_trace("IF: getHW_ADDR %02x:%02x:%02x:%02x:%02x:%02x\n", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    return kIOReturnSuccess;
+}
+
+/*
  * WCLJoinManager::handleJoinRequest reads this first and fails the join on
  * error (0.3.1: "unable to get low latency traffic stats retVal 0xe00002c7").
  * 4 bytes: u8, u8, u16; AppleBCMWLANCore::getWCL_LOW_LATENCY_INFO writes

@@ -612,6 +612,26 @@ const struct mwx_rate {
 
 #define	DEVNAME(s)	((s)->sc_dev.dv_xname)
 
+extern "C" void yy_maclog_start(void);	/* YYavicMtkWlan.cpp */
+
+/* YYavic 0.7.3: thread running the radio bridge on the command gate
+ * (YYavicMtkWlan.cpp yy_radio_gate). */
+extern "C" void * volatile gYYGateThread;
+void * volatile gYYGateThread = NULL;
+
+/* YYavic 0.7.3: the card's factory address (first MT_NIC_CAP_MAC_ADDR), for
+ * the layer's getHW_ADDR ("Private Wi-Fi address" off). */
+static uint8_t gYYHwAddr[ETHER_ADDR_LEN];
+static int gYYHwAddrSet;
+extern "C" int
+mwx_yy_hw_addr(uint8_t *out)
+{
+	if (!gYYHwAddrSet)
+		return 0;
+	memcpy(out, gYYHwAddr, ETHER_ADDR_LEN);
+	return 1;
+}
+
 /*
  * Regulatory channel sets (Yusufcan Yavic, 0.7.1; 0.7.0 and earlier used the
  * Turkish set in the native layer only, while the radio scanned all of its
@@ -4204,6 +4224,19 @@ mwx_diag_timeout(struct mwx_softc *sc, uint32_t cmd, int seq)
 	return sc->sc_rx_pkt_event != ev0;
 }
 
+/* YYavic 0.7.3: firmware command timeouts (dbg 38) */
+static volatile uint32_t gYYMcuTo, gYYMcuToRec;
+static uint32_t gYYMcuToCmd[8];
+
+static void
+mwx_yy_note_timeout(uint32_t cmd, int recovered)
+{
+	gYYMcuToCmd[gYYMcuTo & 7] = cmd;
+	gYYMcuTo++;
+	if (recovered)
+		gYYMcuToRec++;
+}
+
 int
 mwx_mcu_wait_resp_int(struct mwx_softc *sc, uint32_t cmd, int seq,
     uint32_t *val)
@@ -4222,9 +4255,11 @@ mwx_mcu_wait_resp_int(struct mwx_softc *sc, uint32_t cmd, int seq,
 	if (rv != 0) {
 		if (mwx_diag_timeout(sc, cmd, seq)) {
 			MWX_DEV_LOG(sc, "TIMEOUT recovered by polling cmd=%x\n", cmd);
+			mwx_yy_note_timeout(cmd, 1);
 			rv = 0;
 		} else {
 			MWX_DEV_LOG(sc, "command %x timeout (no rx)\n", cmd);
+			mwx_yy_note_timeout(cmd, 0);
 			mwx_reset(sc);
 			return rv;
 		}
@@ -4257,9 +4292,11 @@ mwx_mcu_wait_resp_msg(struct mwx_softc *sc, uint32_t cmd, int seq,
 	if (rv != 0) {
 		if (mwx_diag_timeout(sc, cmd, seq)) {
 			MWX_DEV_LOG(sc, "TIMEOUT recovered by polling cmd=%x\n", cmd);
+			mwx_yy_note_timeout(cmd, 1);
 			rv = 0;
 		} else {
 			MWX_DEV_LOG(sc, "command %x timeout (no rx)\n", cmd);
+			mwx_yy_note_timeout(cmd, 0);
 			mwx_reset(sc);
 			return rv;
 		}
@@ -5132,6 +5169,10 @@ mt7921_mcu_get_nic_capability(struct mwx_softc *sc)
 			if (len < ETHER_ADDR_LEN)
 				break;
 			memcpy(sc->sc_lladdr, mtod(m, caddr_t), ETHER_ADDR_LEN);
+			if (!gYYHwAddrSet) {	/* 0.7.3: the factory address, kept for getHW_ADDR */
+				memcpy(gYYHwAddr, sc->sc_lladdr, ETHER_ADDR_LEN);
+				gYYHwAddrSet = 1;
+			}
 			break;
 		case MT_NIC_CAP_PHY:
 			if (len < sizeof(*cap))
@@ -7990,10 +8031,50 @@ MtkMwx::disable(IONetworkInterface *interface)
 
 /*
  * YYavic radio bridge: take a new own address. The firmware gets the address
- * only when the device is added (mt7921_mcu_uni_add_dev uses sc_lladdr), so
- * cycle the interface like an ifconfig lladdr change: mwx_stop removes the
- * device, mwx_init adds it again with the new sc_lladdr.
+ * only when the device is added (mt7921_mcu_uni_add_dev uses sc_lladdr).
+ * Mode 1 (0.7.3 default): only remove and re-add the firmware device, as
+ * Linux mac80211 does with remove/add_interface (mwx_yy_readd_dev). Mode 0
+ * (0.7.2, dbg 38 a=10): cycle the interface like an ifconfig lladdr change,
+ * mwx_stop removes the device, mwx_init adds it again. Time, firmware
+ * timeouts: dbg 38; radio log of the 15 s after it: ioreg yyavic-maclog.
  */
+static uint32_t gYYMacMode = 1;
+static uint32_t gYYMacN, gYYMacMs, gYYMacTo, gYYMacRv, gYYMacUsed;
+
+static int
+mwx_yy_readd_dev(struct mwx_softc *sc, const uint8_t *mac)
+{
+	struct ieee80211com *ic = &sc->sc_ic;
+	struct ifnet *ifp = &ic->ic_if;
+	struct mwx_node *mn = &sc->sc_vif.vif_mn;
+	int rv, rv2, rv3 = -1;
+
+	/*
+	 * net80211 keeps its state and its node table (the BSSes of the scan
+	 * so far): the join that follows the address change can then start at
+	 * the next scan done. A full mwx_stop/mwx_init emptied the table and a
+	 * stale scan-done of the cancelled scan could end the new scan early;
+	 * at boot the first join stayed in SCAN for WCL's whole 10 s (0.7.3
+	 * test). The running hardware scan is cancelled and started again on
+	 * the re-added device.
+	 */
+	if (sc->sc_flags & (MWX_FLAG_SCANNING | MWX_FLAG_BGSCAN))
+		mt7921_mcu_hw_scan_cancel(sc);
+	sc->sc_flags &= ~(MWX_FLAG_SCANNING | MWX_FLAG_BGSCAN);
+	rv = mt7921_mcu_uni_add_dev(sc, &sc->sc_vif, mn, 0);
+	IEEE80211_ADDR_COPY(sc->sc_lladdr, mac);
+	IEEE80211_ADDR_COPY(ic->ic_myaddr, mac);
+	if_setlladdr(ifp, mac);
+	rv2 = mt7921_mcu_uni_add_dev(sc, &sc->sc_vif, mn, 1);
+	if (rv2 == 0)
+		rv2 = mt7921_mcu_set_tx(sc, &sc->sc_vif);
+	if (rv2 == 0 && ic->ic_state == IEEE80211_S_SCAN)
+		rv3 = mt7921_mcu_hw_scan(sc, 0);
+	MWX_DEV_LOG(sc, "own address re-add del=%d add=%d scan=%d state=%d nodes=%d\n",
+	    rv, rv2, rv3, (int)ic->ic_state, mwx_count_nodes(ic));
+	return rv2;
+}
+
 IOReturn
 MtkMwx::setOwnAddress(const uint8_t *mac)
 {
@@ -8003,14 +8084,30 @@ MtkMwx::setOwnAddress(const uint8_t *mac)
 	struct ifnet *ifp = &ic->ic_if;
 	if (IEEE80211_ADDR_EQ(com->sc_lladdr, mac) && IEEE80211_ADDR_EQ(ic->ic_myaddr, mac))
 		return kIOReturnSuccess;
+	uint32_t to0 = gYYMcuTo;
+	uint64_t t0 = mach_absolute_time(), ns = 0;
+	yy_maclog_start();
 	bool up = (ifp->if_flags & IFF_UP) != 0;
-	if (up)
-		disable(NULL);
-	IEEE80211_ADDR_COPY(com->sc_lladdr, mac);
-	IEEE80211_ADDR_COPY(ic->ic_myaddr, mac);
-	if_setlladdr(ifp, mac);
-	IOReturn r = up ? enable(NULL) : kIOReturnSuccess;
-	MWX_DEV_LOG(com, "own address now %s (cycle %d) = 0x%x\n", ether_sprintf(ic->ic_myaddr), up, r);
+	IOReturn r;
+	if (gYYMacMode == 1 && up && (ifp->if_flags & IFF_RUNNING)) {
+		gYYMacUsed = 1;
+		r = mwx_yy_readd_dev(com, mac) == 0 ? kIOReturnSuccess : kIOReturnError;
+	} else {
+		gYYMacUsed = 0;
+		if (up)
+			disable(NULL);
+		IEEE80211_ADDR_COPY(com->sc_lladdr, mac);
+		IEEE80211_ADDR_COPY(ic->ic_myaddr, mac);
+		if_setlladdr(ifp, mac);
+		r = up ? enable(NULL) : kIOReturnSuccess;
+	}
+	absolutetime_to_nanoseconds(mach_absolute_time() - t0, &ns);
+	gYYMacN++;
+	gYYMacMs = (uint32_t)(ns / 1000000);
+	gYYMacTo = gYYMcuTo - to0;
+	gYYMacRv = r;
+	MWX_DEV_LOG(com, "own address now %s (mode %u, up %d) = 0x%x in %u ms, %u fw timeouts\n",
+	    ether_sprintf(ic->ic_myaddr), gYYMacUsed, up, r, gYYMacMs, gYYMacTo);
 	return r;
 }
 
@@ -8190,6 +8287,8 @@ MtkMwx::mwxOnWorkLoop()
 	IOWorkLoop *wl = getMainWorkLoop();
 	if (gMwxWlThread != NULL && current_thread() == gMwxWlThread)
 		return true;
+	if (gYYGateThread != NULL && current_thread() == (thread_t)gYYGateThread)
+		return true;		/* 0.7.3: radio bridge holding the gate */
 	return wl != NULL && wl->onThread();
 }
 
@@ -8767,6 +8866,17 @@ mwx_dbg(uint32_t op, uint32_t a, uint32_t b, char *out, size_t outlen)
 		    bni ? bni->ni_vhtcaps : 0, bni ? bni->ni_he_cap_elem.phy_cap_info[0] : 0,
 		    bni ? bni->ni_chw : 0, bw, c,
 		    (bni && bni->ni_chan && bni->ni_chan != IEEE80211_CHAN_ANYC) ? bni->ni_chan->ic_center_freq1 : 0);
+		break;
+	}
+	case 38: {	/* YYavic 0.7.3 own-address change: a=10 full cycle (default), a=11 re-add only; timing + fw timeouts */
+		if (a == 0x10)
+			gYYMacMode = 0;
+		else if (a == 0x11)
+			gYYMacMode = 1;
+		snprintf(out, outlen, "mac mode=%u | last: n=%u used=%u %u ms rv=0x%x fw_timeouts=%u | fw timeouts total=%u recovered=%u last cmds %x %x %x %x",
+		    gYYMacMode, gYYMacN, gYYMacUsed, gYYMacMs, gYYMacRv, gYYMacTo, gYYMcuTo, gYYMcuToRec,
+		    gYYMcuToCmd[(gYYMcuTo - 1) & 7], gYYMcuToCmd[(gYYMcuTo - 2) & 7],
+		    gYYMcuToCmd[(gYYMcuTo - 3) & 7], gYYMcuToCmd[(gYYMcuTo - 4) & 7]);
 		break;
 	}
 	case 37: {	/* YYavic 0.7.1 country: a=0 show; a='T'<<8|'R' (0x5452), 0x3030 = '00'.

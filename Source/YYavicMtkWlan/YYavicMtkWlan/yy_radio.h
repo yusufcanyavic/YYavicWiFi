@@ -40,6 +40,8 @@
 /* Radio power (ABI 4): off = deauth + firmware device down (mwx_stop),
  * on = up again (mwx_init, scanning). */
 #define YY_RADIO_FN_POWER       "yyRadioPower"      /* p1: uint32_t *on */
+/* 0.7.3: the card's factory address (not the current, possibly private one). */
+#define YY_RADIO_FN_HW_MAC      "yyRadioHwMac"      /* p1: uint8_t[6] (out) */
 
 typedef void (*yy_radio_rx_fn)(void *ctx, void *mbuf);
 
