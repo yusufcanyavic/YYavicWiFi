@@ -1091,9 +1091,16 @@ ieee80211_add_rsn_body(u_int8_t *frm, struct ieee80211com *ic,
     if (wpa)
         return frm;
 
-    /* write RSN Capabilities field */
-    rsncaps = (ni->ni_rsncaps & (IEEE80211_RSNCAP_PTKSA_RCNT_MASK |
-        IEEE80211_RSNCAP_GTKSA_RCNT_MASK));
+    /*
+     * write RSN Capabilities field. As a station, do not echo the AP's
+     * PTKSA/GTKSA replay counter counts (0x3c on the Windows Mobile Hotspot);
+     * advertise the default single counters, as wpa_supplicant and macOS do.
+     */
+    if (ic->ic_opmode == IEEE80211_M_STA)
+        rsncaps = 0;
+    else
+        rsncaps = (ni->ni_rsncaps & (IEEE80211_RSNCAP_PTKSA_RCNT_MASK |
+            IEEE80211_RSNCAP_GTKSA_RCNT_MASK));
     if (ic->ic_caps & IEEE80211_C_MFP) {
         rsncaps |= IEEE80211_RSNCAP_MFPC;
         if (ic->ic_flags & IEEE80211_F_MFPR)
@@ -1607,7 +1614,13 @@ ieee80211_get_assoc_req(struct ieee80211com *ic, struct ieee80211_node *ni,
 
 	frm = mtod(m, u_int8_t *);
 	capinfo = IEEE80211_CAPINFO_ESS;
-	if (ic->ic_flags & IEEE80211_F_WEPON)
+	/*
+	 * Set Privacy for WPA/RSN networks too, not only WEP (as Linux mac80211
+	 * does). The Windows Mobile Hotspot refuses an RSN association request
+	 * without it, with status 45 (invalid RSN capabilities).
+	 */
+	if ((ic->ic_flags & (IEEE80211_F_WEPON | IEEE80211_F_RSNON)) ||
+	    (ni->ni_capinfo & IEEE80211_CAPINFO_PRIVACY))
 		capinfo |= IEEE80211_CAPINFO_PRIVACY;
 	if ((ic->ic_flags & IEEE80211_F_SHPREAMBLE) &&
 	    IEEE80211_IS_CHAN_2GHZ(ni->ni_chan))
